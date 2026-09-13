@@ -6,7 +6,7 @@
 这是网页界面之外的第二套实现，两者共用同一份模型代码
 （:mod:`awe_math.models.percolation.model`），只是渲染方式不同：
 
-* :mod:`awe_math.ui.web` —— 现代网页界面（推荐，Canvas + 实时曲线）
+* :mod:`awe_math.ui.web` —— 现代网页界面
 * :mod:`awe_math.ui.tk`  —— 本文件，传统桌面窗口，无需浏览器
 
 界面构成
@@ -64,13 +64,38 @@ except ImportError:  # 允许直接运行本文件（把项目根目录加入 im
     )
 
 # ----------------------------------------------------------------------
-# 配色方案
+# 界面配色与字体（深色扁平风：近黑底 + 细边框 + 单一强调色）
 # ----------------------------------------------------------------------
-BG_CANVAS = "#101820"       # 画布背景
-COL_BLOCKED = "#2c3542"     # 阻断边
-COL_OPEN = "#2f9fb8"        # 流通边
+BG = "#0f141b"          # 窗口底色
+PANEL = "#151c26"       # 卡片 / 面板底
+PANEL_2 = "#1d2634"     # 输入框 / 按钮底
+BORDER = "#26313f"      # 细边框
+BORDER_2 = "#35455c"    # 悬停边框
+TEXT = "#e6edf6"        # 主文字
+DIM = "#93a1b5"         # 次要文字
+FAINT = "#66748f"       # 弱化文字
+ACCENT = "#38bdf8"      # 主题强调色
+ACCENT_TEXT = "#06283a"  # 强调色按钮上的深色文字
+SEL_BG = "#1d3a52"      # 列表 / 表格选中行
+BTN_HOVER = "#273242"
+BTN_ACTIVE = "#2f3c50"
+OK = "#34d399"
+WARN = "#fbbf24"
+DANGER = "#fb7185"
+
+FONT = ("Microsoft YaHei UI", 10)
+FONT_SM = ("Microsoft YaHei UI", 9)
+FONT_BOLD = ("Microsoft YaHei UI", 10, "bold")
+FONT_TITLE = ("Microsoft YaHei UI", 14, "bold")
+FONT_MONO = ("Consolas", 10)
+FONT_MONO_B = ("Consolas", 10, "bold")
+
+# 画布配色
+BG_CANVAS = "#0c1118"       # 画布背景
+COL_BLOCKED = "#333f4f"     # 阻断边
+COL_OPEN = "#2fa9c9"        # 流通边
 COL_WET_EDGE = "#ffb703"    # 已被水浸透的流通边
-COL_NODE = "#59636f"        # 未浸润节点
+COL_NODE = "#5b6878"        # 未浸润节点
 COL_NODE_EDGE = "#0a0e13"   # 节点描边
 COL_TOP = "#4dabf7"         # 顶端水源
 COL_BOTTOM = "#51cf66"      # 底端出口
@@ -88,6 +113,111 @@ def _lerp_color(start: Tuple[int, int, int], end: Tuple[int, int, int], t: float
     g = int(start[1] + (end[1] - start[1]) * t)
     b = int(start[2] + (end[2] - start[2]) * t)
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _install_theme(root: tk.Tk) -> None:
+    """在 clam 主题上定制一套深色扁平样式（所有控件共用同一调色板）。"""
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+
+    root.configure(bg=BG)
+    root.option_add("*TCombobox*Listbox.background", PANEL_2)
+    root.option_add("*TCombobox*Listbox.foreground", TEXT)
+    root.option_add("*TCombobox*Listbox.selectBackground", SEL_BG)
+    root.option_add("*TCombobox*Listbox.selectForeground", TEXT)
+
+    def cfg(name: str, **kw) -> None:
+        # 个别样式选项在旧版本 Tk 上可能不存在，逐条忽略以保证整体可用
+        try:
+            style.configure(name, **kw)
+        except tk.TclError:
+            pass
+
+    def smap(name: str, **kw) -> None:
+        try:
+            style.map(name, **kw)
+        except tk.TclError:
+            pass
+
+    cfg(".", background=BG, foreground=TEXT, font=FONT)
+    cfg("TFrame", background=BG)
+    cfg("Side.TFrame", background=BG)
+    cfg("Panel.TFrame", background=PANEL)
+    cfg("Card.TFrame", background=PANEL)
+
+    cfg("TLabel", background=BG, foreground=TEXT)
+    cfg("Dim.TLabel", background=BG, foreground=DIM)
+    cfg("Card.TLabel", background=PANEL, foreground=TEXT)
+    cfg("CardDim.TLabel", background=PANEL, foreground=DIM)
+    cfg("Mono.TLabel", background=PANEL, foreground=TEXT, font=FONT_MONO)
+    cfg("MonoAccent.TLabel", background=PANEL, foreground=ACCENT, font=FONT_MONO_B)
+    cfg("Danger.TLabel", background=PANEL, foreground=DANGER)
+
+    cfg("Card.TLabelframe", background=PANEL, bordercolor=BORDER,
+        relief="solid", borderwidth=1)
+    cfg("Card.TLabelframe.Label", background=PANEL, foreground=FAINT,
+        font=("Microsoft YaHei UI", 9, "bold"))
+
+    cfg("TButton", background=PANEL_2, foreground=TEXT, bordercolor=BORDER,
+        focusthickness=1, focuscolor=BORDER_2, padding=(12, 7))
+    smap("TButton",
+         background=[("pressed", BTN_ACTIVE), ("active", BTN_HOVER), ("disabled", PANEL_2)],
+         foreground=[("disabled", FAINT)],
+         bordercolor=[("active", BORDER_2), ("disabled", BORDER)])
+
+    cfg("Accent.TButton", background=ACCENT, foreground=ACCENT_TEXT,
+        bordercolor=ACCENT, font=FONT_BOLD, padding=(12, 7))
+    smap("Accent.TButton",
+         background=[("pressed", "#0ea5e9"), ("active", "#7dd3fc"), ("disabled", PANEL_2)],
+         foreground=[("disabled", FAINT)],
+         bordercolor=[("disabled", BORDER)])
+
+    cfg("Danger.TButton", background="#3d2029", foreground="#fda4af",
+        bordercolor="#5b2a35", padding=(12, 7))
+    smap("Danger.TButton",
+         background=[("pressed", "#57222f"), ("active", "#4a222d"), ("disabled", PANEL_2)],
+         foreground=[("disabled", FAINT)],
+         bordercolor=[("disabled", BORDER)])
+
+    cfg("TCheckbutton", background=BG, foreground=TEXT)
+    cfg("Card.TCheckbutton", background=PANEL, foreground=TEXT)
+    smap("TCheckbutton", background=[("active", BG)])
+    smap("Card.TCheckbutton", background=[("active", PANEL)])
+
+    cfg("Horizontal.TScale", background=ACCENT, troughcolor=PANEL_2,
+        bordercolor=BG, lightcolor=ACCENT, darkcolor=ACCENT)
+
+    cfg("TSpinbox", fieldbackground=PANEL_2, foreground=TEXT, background=PANEL_2,
+        bordercolor=BORDER, insertcolor=TEXT)
+    cfg("TCombobox", fieldbackground=PANEL_2, foreground=TEXT, background=PANEL_2,
+        bordercolor=BORDER, insertcolor=TEXT,
+        selectbackground=SEL_BG, selectforeground=TEXT)
+
+    cfg("TNotebook", background=BG, bordercolor=BG, tabmargins=(0, 4, 0, 0))
+    cfg("TNotebook.Tab", background=BG, foreground=FAINT, padding=(14, 8))
+    smap("TNotebook.Tab",
+         background=[("selected", PANEL), ("active", PANEL_2)],
+         foreground=[("selected", TEXT), ("active", DIM)])
+
+    cfg("Treeview", background=PANEL, fieldbackground=PANEL, foreground=TEXT,
+        bordercolor=BORDER, rowheight=26, font=FONT_SM)
+    smap("Treeview",
+         background=[("selected", SEL_BG)],
+         foreground=[("selected", TEXT)])
+    cfg("Treeview.Heading", background=PANEL_2, foreground=DIM,
+        bordercolor=BORDER, relief="flat", padding=(4, 6))
+    smap("Treeview.Heading", background=[("active", BTN_HOVER)])
+
+    cfg("Vertical.TScrollbar", background=PANEL_2, troughcolor=PANEL,
+        bordercolor=PANEL, arrowcolor=DIM)
+    smap("Vertical.TScrollbar", background=[("active", BTN_HOVER)])
+
+    cfg("Horizontal.TProgressbar", troughcolor=PANEL_2, background=ACCENT,
+        bordercolor=BG, lightcolor=ACCENT, darkcolor=ACCENT)
+    cfg("TSeparator", background=BORDER)
 
 
 # ----------------------------------------------------------------------
@@ -135,8 +265,8 @@ class PercolationApp:
         model_name = getattr(spec, "name", "方格网渗流")
 
         self.root.title(f"{model_name} · 数学模型可视化（桌面窗口）")
-        self.root.geometry("1320x840")
-        self.root.minsize(1040, 700)
+        self.root.geometry("1440x880")
+        self.root.minsize(1200, 780)
 
         # ---------------- 模型与状态 ----------------
         self.grid_model = PercolationGrid(size=init_size, p=init_p, rng=random.Random())
@@ -201,110 +331,165 @@ class PercolationApp:
     # 界面搭建
     # ==================================================================
     def _build_ui(self) -> None:
-        self.root.columnconfigure(0, weight=1)
+        self.root.configure(bg=BG)
+        self.root.columnconfigure(0, weight=0)   # 左侧控制栏
+        self.root.columnconfigure(1, weight=1)   # 中央画布
+        self.root.columnconfigure(2, weight=0)   # 右侧数据面板
         self.root.rowconfigure(1, weight=1)
 
-        self._build_control_panel()
-        self._build_body()
+        self._build_header()
+        self._build_sidebar()
+        self._build_center()
+        self._build_right()
         self._build_status_bar()
 
-    # ---------------------------- 控制面板 ----------------------------
-    def _build_control_panel(self) -> None:
-        frame = ttk.LabelFrame(self.root, text="控制面板", padding=(12, 8))
-        frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
-        frame.columnconfigure(9, weight=1)
+    # ---------------------------- 顶部标题栏 ----------------------------
+    def _build_header(self) -> None:
+        header = tk.Frame(self.root, bg=BG)
+        header.grid(row=0, column=0, columnspan=3, sticky="ew")
 
-        # --- 第一行：参数 ---
-        ttk.Label(frame, text="流通概率 p").grid(row=0, column=0, padx=(0, 6), sticky="w")
-        self.scale_p = tk.Scale(
-            frame,
-            variable=self.var_p,
-            from_=0.0,
-            to=1.0,
-            resolution=0.01,
-            orient="horizontal",
-            showvalue=False,
-            length=240,
+        inner = tk.Frame(header, bg=BG)
+        inner.pack(fill="x", padx=16, pady=(12, 10))
+        inner.columnconfigure(2, weight=1)
+
+        model_name = getattr(self.spec, "name", "方格网渗流")
+        tk.Label(inner, text=f"≋ {model_name}", bg=BG, fg=ACCENT,
+                 font=FONT_TITLE).grid(row=0, column=0, sticky="w")
+        tk.Label(inner, text="数学模型可视化 · 桌面窗口", bg=BG, fg=FAINT,
+                 font=FONT_SM).grid(row=0, column=1, sticky="sw", padx=(12, 0), pady=(0, 2))
+        tk.Label(inner, text="空格 播放动画    R 重新生成", bg=BG, fg=FAINT,
+                 font=FONT_SM).grid(row=0, column=3, sticky="e")
+
+        tk.Frame(header, bg=BORDER, height=1).pack(fill="x")
+
+    # ---------------------------- 左侧控制栏 ----------------------------
+    def _build_sidebar(self) -> None:
+        side = ttk.Frame(self.root, style="Side.TFrame", width=292)
+        side.grid(row=1, column=0, sticky="ns", padx=(14, 7), pady=12)
+        side.grid_propagate(False)
+
+        self._build_param_card(side)
+        self._build_action_card(side)
+        self._build_batch_card(side)
+        self._build_scan_card(side)
+
+        self.btn_stop = ttk.Button(
+            side, text="■ 停止后台任务", style="Danger.TButton",
+            command=self.stop_work, state="disabled",
+        )
+        self.btn_stop.pack(fill="x", pady=(2, 0))
+
+    @staticmethod
+    def _card(parent: tk.Widget, title: str) -> ttk.LabelFrame:
+        card = ttk.LabelFrame(
+            parent, text=f" {title} ", style="Card.TLabelframe",
+            padding=(14, 10, 14, 12),
+        )
+        card.pack(fill="x", pady=(0, 10))
+        return card
+
+    def _build_param_card(self, parent: tk.Widget) -> None:
+        card = self._card(parent, "参数")
+
+        head = ttk.Frame(card, style="Card.TFrame")
+        head.pack(fill="x")
+        ttk.Label(head, text="流通概率 p", style="Card.TLabel").pack(side="left")
+        self.lbl_p = ttk.Label(
+            head, text=f"p = {self.var_p.get():.2f}", style="MonoAccent.TLabel",
+        )
+        self.lbl_p.pack(side="right")
+
+        self.scale_p = ttk.Scale(
+            card, from_=0.0, to=1.0, variable=self.var_p,
             command=self._on_p_change,
         )
-        self.scale_p.grid(row=0, column=1, padx=(0, 6))
-        self.lbl_p = ttk.Label(frame, text="p = 0.50", width=10, font=("Consolas", 10, "bold"))
-        self.lbl_p.grid(row=0, column=2, padx=(0, 16), sticky="w")
+        self.scale_p.pack(fill="x", pady=(4, 12))
 
-        ttk.Label(frame, text="网格尺寸 n").grid(row=0, column=3, padx=(0, 6), sticky="w")
-        spin_size = ttk.Spinbox(
-            frame,
-            from_=5,
-            to=MAX_SIZE,
-            width=5,
-            textvariable=self.var_size,
-            command=self._on_size_change,
+        row = ttk.Frame(card, style="Card.TFrame")
+        row.pack(fill="x", pady=(0, 10))
+        ttk.Label(row, text="网格尺寸 n", style="Card.TLabel").pack(side="left")
+        ttk.Label(row, text="× n", style="CardDim.TLabel").pack(side="right")
+        spin = ttk.Spinbox(
+            row, from_=5, to=MAX_SIZE, width=5,
+            textvariable=self.var_size, command=self._on_size_change,
         )
-        spin_size.grid(row=0, column=4, padx=(0, 4))
-        spin_size.bind("<Return>", lambda _e: self._on_size_change())
-        spin_size.bind("<FocusOut>", lambda _e: self._on_size_change())
-        ttk.Label(frame, text="×n").grid(row=0, column=5, padx=(0, 16), sticky="w")
-
-        ttk.Label(frame, text="动画间隔(ms)").grid(row=0, column=6, padx=(0, 6), sticky="w")
-        tk.Scale(
-            frame,
-            variable=self.var_speed,
-            from_=1,
-            to=200,
-            resolution=1,
-            orient="horizontal",
-            showvalue=False,
-            length=120,
-        ).grid(row=0, column=7, padx=(0, 16))
-
-        ttk.Label(frame, text="统计次数 N").grid(row=0, column=8, padx=(0, 6), sticky="w")
-        ttk.Combobox(
-            frame,
-            width=8,
-            textvariable=self.var_trials,
-            values=("100", "500", "1000", "5000", "10000"),
-        ).grid(row=0, column=9, padx=(0, 6), sticky="w")
-
-        # --- 第二行：按钮 ---
-        btns = ttk.Frame(frame)
-        btns.grid(row=1, column=0, columnspan=10, sticky="ew", pady=(8, 0))
-
-        self.btn_regen = ttk.Button(btns, text="重新生成网格", command=self.regenerate_grid)
-        self.btn_anim = ttk.Button(btns, text="开始渗透（动画）", command=self.start_animation)
-        self.btn_instant = ttk.Button(btns, text="立即判定", command=self.show_result_instant)
-        self.btn_batch = ttk.Button(btns, text="批量统计", command=self.start_batch_statistics)
-        self.btn_scan = ttk.Button(btns, text="绘制 P(p) 曲线", command=self.start_scan)
-        self.btn_stop = ttk.Button(btns, text="停止", command=self.stop_work, state="disabled")
-
-        for i, btn in enumerate(
-            (self.btn_regen, self.btn_anim, self.btn_instant, self.btn_batch, self.btn_scan, self.btn_stop)
-        ):
-            btn.grid(row=0, column=i, padx=(0, 8))
+        spin.pack(side="right", padx=(0, 4))
+        spin.bind("<Return>", lambda _e: self._on_size_change())
+        spin.bind("<FocusOut>", lambda _e: self._on_size_change())
 
         self.var_undirected = tk.BooleanVar(value=True)
         ttk.Checkbutton(
-            btns,
+            card,
             text="允许向上流动（标准无向渗流）",
             variable=self.var_undirected,
+            style="Card.TCheckbutton",
             command=self._on_direction_change,
-        ).grid(row=0, column=6, padx=(12, 12))
+        ).pack(anchor="w", pady=(0, 12))
 
-        ttk.Label(btns, text="曲线每点次数").grid(row=0, column=7, padx=(0, 4))
-        ttk.Spinbox(
-            btns,
-            from_=20,
-            to=5000,
-            increment=20,
-            width=6,
-            textvariable=self.var_scan_trials,
-        ).grid(row=0, column=8, padx=(0, 10))
-        ttk.Label(btns, text="p 步进").grid(row=0, column=9, padx=(0, 4))
+        ttk.Label(card, text="动画间隔（ms）", style="Card.TLabel").pack(anchor="w")
+        speed = ttk.Scale(card, from_=1, to=200, command=self._on_speed_change)
+        speed.set(self.var_speed.get())
+        speed.pack(fill="x", pady=(4, 0))
+
+    def _on_speed_change(self, value: str) -> None:
+        try:
+            self.var_speed.set(max(1, min(200, int(round(float(value))))))
+        except (TypeError, ValueError):
+            pass
+
+    def _build_action_card(self, parent: tk.Widget) -> None:
+        card = self._card(parent, "操作")
+        card.columnconfigure(0, weight=1)
+        card.columnconfigure(1, weight=1)
+
+        self.btn_anim = ttk.Button(
+            card, text="▶ 播放渗透动画", style="Accent.TButton",
+            command=self.start_animation,
+        )
+        self.btn_anim.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+
+        self.btn_regen = ttk.Button(card, text="↻ 重新生成", command=self.regenerate_grid)
+        self.btn_instant = ttk.Button(card, text="⤓ 立即判定", command=self.show_result_instant)
+        self.btn_regen.grid(row=1, column=0, sticky="ew", padx=(0, 4))
+        self.btn_instant.grid(row=1, column=1, sticky="ew", padx=(4, 0))
+
+    def _build_batch_card(self, parent: tk.Widget) -> None:
+        card = self._card(parent, "批量统计")
+
+        row = ttk.Frame(card, style="Card.TFrame")
+        row.pack(fill="x", pady=(0, 10))
+        ttk.Label(row, text="统计次数 N", style="Card.TLabel").pack(side="left")
         ttk.Combobox(
-            btns,
-            width=5,
-            textvariable=self.var_scan_step,
+            row, width=8, textvariable=self.var_trials,
+            values=("100", "500", "1000", "5000", "10000"),
+        ).pack(side="right")
+
+        self.btn_batch = ttk.Button(
+            card, text="开始批量统计", command=self.start_batch_statistics,
+        )
+        self.btn_batch.pack(fill="x")
+
+    def _build_scan_card(self, parent: tk.Widget) -> None:
+        card = self._card(parent, "曲线扫描")
+
+        row1 = ttk.Frame(card, style="Card.TFrame")
+        row1.pack(fill="x", pady=(0, 8))
+        ttk.Label(row1, text="曲线每点次数", style="Card.TLabel").pack(side="left")
+        ttk.Spinbox(
+            row1, from_=20, to=5000, increment=20, width=7,
+            textvariable=self.var_scan_trials,
+        ).pack(side="right")
+
+        row2 = ttk.Frame(card, style="Card.TFrame")
+        row2.pack(fill="x", pady=(0, 10))
+        ttk.Label(row2, text="p 扫描步进", style="Card.TLabel").pack(side="left")
+        ttk.Combobox(
+            row2, width=6, textvariable=self.var_scan_step,
             values=("0.02", "0.05", "0.1"),
-        ).grid(row=0, column=10)
+        ).pack(side="right")
+
+        self.btn_scan = ttk.Button(card, text="绘制 P(p) 曲线", command=self.start_scan)
+        self.btn_scan.pack(fill="x")
 
         self._action_buttons = [
             self.btn_regen,
@@ -314,43 +499,27 @@ class PercolationApp:
             self.btn_scan,
         ]
 
-    # ---------------------------- 主体区域 ----------------------------
-    def _build_body(self) -> None:
-        body = ttk.Frame(self.root)
-        body.grid(row=1, column=0, sticky="nsew", padx=10, pady=4)
-        body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=0)
-        body.rowconfigure(0, weight=1)
+    # ---------------------------- 中央画布 ----------------------------
+    def _build_center(self) -> None:
+        center = ttk.Frame(self.root, style="Side.TFrame")
+        center.grid(row=1, column=1, sticky="nsew", pady=12)
+        center.rowconfigure(0, weight=1)
+        center.columnconfigure(0, weight=1)
 
-        # 左：网格画布
-        left = ttk.LabelFrame(body, text="网格渗透过程", padding=4)
-        left.grid(row=0, column=0, sticky="nsew")
-        left.rowconfigure(0, weight=1)
-        left.columnconfigure(0, weight=1)
-
-        self.canvas = tk.Canvas(left, bg=BG_CANVAS, highlightthickness=0)
+        self.canvas = tk.Canvas(
+            center, bg=BG_CANVAS, highlightthickness=1,
+            highlightbackground=BORDER, highlightcolor=BORDER,
+        )
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas.bind("<Configure>", self._on_canvas_resize)
 
-        self._build_legend(left).grid(row=1, column=0, sticky="ew", pady=(4, 0))
-
-        # 右：统计面板
-        self.notebook = ttk.Notebook(body, width=440)
-        self.notebook.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-
-        self.tab_single = ttk.Frame(self.notebook, padding=10)
-        self.tab_batch = ttk.Frame(self.notebook, padding=10)
-        self.tab_curve = ttk.Frame(self.notebook, padding=6)
-        self.notebook.add(self.tab_single, text="本次模拟")
-        self.notebook.add(self.tab_batch, text="批量统计")
-        self.notebook.add(self.tab_curve, text="P(p) 曲线")
-
-        self._build_single_tab()
-        self._build_batch_tab()
-        self._build_curve_tab()
+        self._build_legend(center).grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
     def _build_legend(self, parent: tk.Widget) -> tk.Canvas:
-        cv = tk.Canvas(parent, height=26, bg="#f3f4f6", highlightthickness=0)
+        cv = tk.Canvas(
+            parent, height=30, bg=PANEL, highlightthickness=1,
+            highlightbackground=BORDER, highlightcolor=BORDER,
+        )
         items = [
             ("line", COL_OPEN, "流通边"),
             ("dash", COL_BLOCKED, "阻断边"),
@@ -359,27 +528,52 @@ class PercolationApp:
             ("dot", COL_TOP, "顶端水源"),
             ("dot", COL_BOTTOM, "底端出口"),
         ]
-        x = 8
+        x = 12
         for kind, color, text in items:
             if kind == "line":
-                cv.create_line(x, 13, x + 20, 13, fill=color, width=3)
+                cv.create_line(x, 15, x + 20, 15, fill=color, width=3)
             elif kind == "dash":
-                cv.create_line(x, 13, x + 20, 13, fill=color, width=2, dash=(2, 3))
+                cv.create_line(x, 15, x + 20, 15, fill=color, width=2, dash=(2, 3))
             else:
-                cv.create_oval(x + 5, 8, x + 15, 18, fill=color, outline="#0a0e13")
-            cv.create_text(x + 25, 13, text=text, anchor="w", fill="#333", font=("Microsoft YaHei", 8))
-            x += 25 + len(text) * 12 + 14
+                cv.create_oval(x + 5, 10, x + 15, 20, fill=color, outline=COL_NODE_EDGE)
+            cv.create_text(x + 25, 15, text=text, anchor="w", fill=DIM, font=FONT_SM)
+            x += 25 + len(text) * 13 + 16
         return cv
 
+    # ---------------------------- 右侧数据面板 ----------------------------
+    def _build_right(self) -> None:
+        self.notebook = ttk.Notebook(self.root, width=412)
+        self.notebook.grid(row=1, column=2, sticky="nsew", padx=(7, 14), pady=12)
+
+        self.tab_single = ttk.Frame(self.notebook, style="Panel.TFrame", padding=12)
+        self.tab_batch = ttk.Frame(self.notebook, style="Panel.TFrame", padding=12)
+        self.tab_curve = ttk.Frame(self.notebook, style="Panel.TFrame", padding=8)
+        self.notebook.add(self.tab_single, text=" 本次模拟 ")
+        self.notebook.add(self.tab_batch, text=" 批量统计 ")
+        self.notebook.add(self.tab_curve, text=" P(p) 曲线 ")
+
+        self._build_single_tab()
+        self._build_batch_tab()
+        self._build_curve_tab()
+
     def _add_stat_row(self, parent: tk.Widget, row: int, label: str, var: tk.StringVar) -> None:
-        ttk.Label(parent, text=label, width=14, anchor="w").grid(row=row, column=0, sticky="w", pady=3)
-        ttk.Label(parent, textvariable=var, anchor="w", font=("Consolas", 10)).grid(
-            row=row, column=1, sticky="w", pady=3
+        ttk.Label(parent, text=label, style="CardDim.TLabel", width=14, anchor="w").grid(
+            row=row, column=0, sticky="w", pady=4
+        )
+        ttk.Label(parent, textvariable=var, style="Mono.TLabel", anchor="w").grid(
+            row=row, column=1, sticky="w", pady=4
         )
 
     def _build_single_tab(self) -> None:
         tab = self.tab_single
         tab.columnconfigure(1, weight=1)
+
+        self.badge = tk.Label(
+            tab, text="— 等待生成 —", bg=PANEL_2, fg=FAINT,
+            font=("Microsoft YaHei UI", 12, "bold"), pady=12,
+        )
+        self.badge.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
+
         rows = [
             ("当前概率 p", "p"),
             ("网格规模", "size"),
@@ -389,14 +583,19 @@ class PercolationApp:
             ("渗透层数", "depth"),
             ("判定耗时", "cost"),
         ]
-        for i, (label, key) in enumerate(rows):
+        for i, (label, key) in enumerate(rows, start=1):
             self._add_stat_row(tab, i, label, self.vals[key])
 
+        sep_row = len(rows) + 1
         ttk.Separator(tab, orient="horizontal").grid(
-            row=len(rows), column=0, columnspan=2, sticky="ew", pady=8
+            row=sep_row, column=0, columnspan=2, sticky="ew", pady=10
         )
         ttk.Label(
             tab,
+            style="CardDim.TLabel",
+            wraplength=350,
+            justify="left",
+            font=FONT_SM,
             text=(
                 "说明：\n"
                 "· 顶端整行视为水源，底端整行视为出口；\n"
@@ -405,18 +604,18 @@ class PercolationApp:
                 f"· 二维方格网键渗流的理论阈值 p_c = {THEORETICAL_PC}，\n"
                 "  在它附近渗流概率急剧上升 —— 量变引起质变。"
             ),
-            justify="left",
-            foreground="#555",
-            font=("Microsoft YaHei", 9),
-        ).grid(row=len(rows) + 1, column=0, columnspan=2, sticky="w")
+        ).grid(row=sep_row + 1, column=0, columnspan=2, sticky="w")
 
     def _build_batch_tab(self) -> None:
         tab = self.tab_batch
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(2, weight=1)
 
-        info = ttk.LabelFrame(tab, text="最近一次批量统计", padding=8)
-        info.grid(row=0, column=0, sticky="ew")
+        info = ttk.LabelFrame(
+            tab, text=" 最近一次批量统计 ", style="Card.TLabelframe",
+            padding=(14, 10, 14, 12),
+        )
+        info.grid(row=0, column=0, columnspan=2, sticky="ew")
         info.columnconfigure(1, weight=1)
         rows = [
             ("统计概率 p", "b_p"),
@@ -429,9 +628,9 @@ class PercolationApp:
         for i, (label, key) in enumerate(rows):
             self._add_stat_row(info, i, label, self.vals[key])
 
-        head = ttk.Frame(tab)
-        head.grid(row=1, column=0, sticky="ew", pady=(10, 2))
-        ttk.Label(head, text="历史记录", font=("Microsoft YaHei", 9, "bold")).pack(side="left")
+        head = ttk.Frame(tab, style="Panel.TFrame")
+        head.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 4))
+        ttk.Label(head, text="历史记录", style="Card.TLabel", font=FONT_BOLD).pack(side="left")
         ttk.Button(head, text="清空", width=6, command=self._clear_history).pack(side="right")
 
         cols = ("p", "n", "trials", "success", "prob", "time")
@@ -439,13 +638,13 @@ class PercolationApp:
         for col, text, width in zip(
             cols,
             ("概率 p", "网格 n", "次数", "成功", "渗流概率", "耗时(s)"),
-            (60, 58, 62, 58, 88, 70),
+            (56, 56, 60, 56, 84, 66),
         ):
             self.tree.heading(col, text=text)
             self.tree.column(col, width=width, anchor="center")
         self.tree.grid(row=2, column=0, sticky="nsew")
-        self.tree.tag_configure("ok", foreground="#166534")
-        self.tree.tag_configure("no", foreground="#9d174d")
+        self.tree.tag_configure("ok", foreground="#4ade80")
+        self.tree.tag_configure("no", foreground="#fb7185")
 
         bar = ttk.Scrollbar(tab, orient="vertical", command=self.tree.yview)
         bar.grid(row=2, column=1, sticky="ns")
@@ -460,30 +659,38 @@ class PercolationApp:
             ttk.Label(
                 tab,
                 text="未检测到 matplotlib，无法绘制曲线。\n可执行 pip install matplotlib 后重试。",
+                style="Danger.TLabel",
                 justify="left",
-                foreground="#a33",
             ).grid(row=0, column=0, sticky="nw", padx=10, pady=10)
             self.figure = None
             self.ax = None
             self.figure_canvas = None
             return
 
-        self.figure = Figure(figsize=(4.3, 3.4), dpi=100, facecolor="#fafafa")
+        self.figure = Figure(figsize=(4.3, 3.4), dpi=100, facecolor=PANEL)
         self.ax = self.figure.add_subplot(111)
         self.figure_canvas = FigureCanvasTkAgg(self.figure, master=tab)
         self.figure_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
         toolbar = NavigationToolbar2Tk(self.figure_canvas, tab, pack_toolbar=False)
         toolbar.update()
+        toolbar.configure(bg=PANEL)
+        for child in toolbar.winfo_children():
+            try:
+                child.configure(bg=PANEL)
+            except tk.TclError:
+                pass
         toolbar.grid(row=1, column=0, sticky="ew")
 
     # ---------------------------- 状态栏 ----------------------------
     def _build_status_bar(self) -> None:
         bar = ttk.Frame(self.root)
-        bar.grid(row=2, column=0, sticky="ew", padx=10, pady=(4, 8))
+        bar.grid(row=2, column=0, columnspan=3, sticky="ew", padx=16, pady=(2, 10))
         bar.columnconfigure(0, weight=1)
-        ttk.Label(bar, textvariable=self.var_status, anchor="w").grid(row=0, column=0, sticky="ew")
-        self.progress = ttk.Progressbar(bar, length=240, mode="determinate")
-        self.progress.grid(row=0, column=1, padx=(10, 0))
+        ttk.Label(bar, textvariable=self.var_status, style="Dim.TLabel", anchor="w").grid(
+            row=0, column=0, sticky="ew"
+        )
+        self.progress = ttk.Progressbar(bar, length=260, mode="determinate")
+        self.progress.grid(row=0, column=1, padx=(12, 0))
 
     # ==================================================================
     # 参数与事件
@@ -864,6 +1071,16 @@ class PercolationApp:
         else:
             self.vals["edges"].set(f"- / {model.total_edge_count()}")
 
+        # 顶部的结论徽章
+        if res is None:
+            self.badge.configure(text="— 等待生成 —", bg=PANEL_2, fg=FAINT)
+        elif self._shown_layers < len(res.layers):
+            self.badge.configure(text="渗透中 …", bg=PANEL_2, fg=WARN)
+        elif res.percolates:
+            self.badge.configure(text="✔ 渗流出水：已从顶端贯通到底端", bg="#0f2e1f", fg="#4ade80")
+        else:
+            self.badge.configure(text="✘ 未贯通：水被阻断", bg="#331420", fg="#fb7185")
+
     def _insert_history(self, res: BatchResult, tag: str) -> None:
         self.tree.insert(
             "", 0,
@@ -1013,6 +1230,18 @@ class PercolationApp:
     # ==================================================================
     # 曲线绘制
     # ==================================================================
+    def _style_ax(self) -> None:
+        """把坐标轴刷成暗色（clear 之后需要重新设置）。"""
+        if self.ax is None:
+            return
+        ax = self.ax
+        ax.set_facecolor(PANEL)
+        for spine in ax.spines.values():
+            spine.set_color(BORDER)
+        ax.tick_params(colors=DIM)
+        ax.xaxis.label.set_color(DIM)
+        ax.yaxis.label.set_color(DIM)
+
     def _redraw_curve(self) -> None:
         if not HAS_MPL or self.ax is None:
             return
@@ -1024,35 +1253,43 @@ class PercolationApp:
                 0.5, 0.5,
                 "点击「绘制 P(p) 曲线」开始扫描",
                 transform=ax.transAxes, ha="center", va="center",
-                color="#888", fontsize=10,
+                color=FAINT, fontsize=10,
             )
             ax.set_xticks([])
             ax.set_yticks([])
         else:
             xs = [r.p for r in self._scan_results]
             ys = [r.probability * 100.0 for r in self._scan_results]
-            ax.plot(xs, ys, "-o", color="#2f6fed", lw=1.6, ms=3.4, label="实验结果（蒙特卡洛）")
+            ax.plot(
+                xs, ys, "-o", color=ACCENT, lw=1.8, ms=3.4,
+                mfc=BG_CANVAS, mec=TEXT, mew=0.8,
+                label="实验结果（蒙特卡洛）",
+            )
             ax.axvline(
-                THEORETICAL_PC, color="#e5533d", ls="--", lw=1.3,
+                THEORETICAL_PC, color=DANGER, ls="--", lw=1.3,
                 label=f"理论阈值 p_c = {THEORETICAL_PC}",
             )
             ax.set_xlabel("流通概率 p", fontsize=9)
             ax.set_ylabel("渗流出水概率 P(p)  (%)", fontsize=9)
             ax.set_xlim(0, 1)
             ax.set_ylim(-3, 103)
-            ax.grid(alpha=0.25, ls=":")
+            ax.grid(color="#22303f", lw=0.8, ls=":")
             ax.tick_params(labelsize=8)
-            ax.legend(loc="upper left", fontsize=8)
+            ax.legend(
+                loc="upper left", fontsize=8,
+                facecolor=PANEL_2, edgecolor=BORDER, labelcolor=TEXT,
+            )
             size, trials = self._scan_meta
-            ax.set_title(f"P(p) 曲线（网格 {size}×{size}，每点 {trials} 次）", fontsize=9)
+            ax.set_title(f"P(p) 曲线（网格 {size}×{size}，每点 {trials} 次）", fontsize=9, color=TEXT)
             if ys and max(ys) >= 100 and min(ys) <= 0:
                 ax.annotate(
                     "相变：量变引起质变",
                     xy=(THEORETICAL_PC, 50), xytext=(THEORETICAL_PC + 0.06, 22),
-                    fontsize=8, color="#b45309",
-                    arrowprops=dict(arrowstyle="->", color="#b45309", lw=1),
+                    fontsize=8, color=WARN,
+                    arrowprops=dict(arrowstyle="->", color=WARN, lw=1),
                 )
 
+        self._style_ax()
         self.figure_canvas.draw_idle()
 
     # ==================================================================
@@ -1069,10 +1306,7 @@ def launch(spec=None, **_kwargs) -> int:
     直接运行本文件时也可以省略。
     """
     root = tk.Tk()
-    try:
-        ttk.Style().theme_use("clam")
-    except tk.TclError:
-        pass
+    _install_theme(root)
     PercolationApp(root, spec=spec)
     root.mainloop()
     return 0
