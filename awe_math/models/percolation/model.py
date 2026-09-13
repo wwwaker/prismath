@@ -1,28 +1,62 @@
 # -*- coding: utf-8 -*-
 """
-方格网边渗流（Bond Percolation）核心模型
+格子网边渗流（Bond Percolation）核心模型
 =========================================
 
-模型约定
---------
-* 在 ``size × size`` 的方格网上，每条「边」（相邻节点之间的连接）以概率 ``p``
-  独立地设置为「流通」或「阻断」。
-* 采用**标准渗流定义（无向连通）**：水沿流通边可以向上、下、左、右任意方向流动，
-  只要某节点与顶端节点处于同一个连通分量中，即认为该节点被浸润。
-  （原题中「只能向下/向左/向右」属于有向渗流，作为可选项 ``directed=True`` 保留。）
-* 若至少存在一个底端节点与顶端节点连通，则认为本次模拟「渗流出水」。
-* 顶端整体视为水源、底端整体视为出口，因此用「虚拟水源 / 虚拟出口」+ 并查集即可判定。
+在 **rows × cols** 的格子网（行数 ≠ 列数就是矩形网格）上，每条「边」以概率 ``p``
+独立地设为「流通」或「阻断」，水从注水点出发沿流通边蔓延。
 
-理论背景
+可选维度
 --------
-二维方格网的键渗流临界值 ``p_c = 1/2``。当 ``p`` 明显小于 1/2 时几乎不可能贯通；
-``p`` 超过 1/2 后几乎必然贯通；在 ``p_c`` 附近发生**相变**，即「量变引起质变」。
+* **格子** ``lattice``：
+
+  - ``square``：方格网，每点最多 4 个邻居；
+  - ``triangular``：三角网，每点最多 6 个邻居（奇数行右移半格 + 两条斜边）。
+
+* **形状** ``rows`` / ``cols``：行列分开指定，``rows != cols`` 即矩形网格。
+
+* **方向** ``direction``：
+
+  - ``undirected``：无向，水可向四面八方流动（标准渗流）；
+  - ``no_up``：不允许向上，只向下 / 左 / 右；
+  - ``down_right``：只允许向下 / 向右（两个出边，经典有向渗流）；
+  - ``down_left``：只允许向下 / 向左（``down_right`` 的镜像）。
+
+* **注水点** ``inject``：
+
+  - ``top``：顶端整行同时注水（经典渗流实验，判定的是「横贯」事件）；
+  - ``center``：中心单点注水（观察一个水团能否长到底端）；
+  - ``random``：随机单点注水（等价于「随机挑一个点，看它所在的水团能否到底端」）。
+
+* **成功判据** ``criterion``：``span``（贯通）/ ``area``（面积），见下。
+
+两种成功判据（务必区分）
+------------------------
+``criterion`` 决定「什么算成功」：
+
+* ``span`` **贯通判据**（默认）：整张网格上**是否存在从顶行连通到底行的纵贯簇**，
+  也就是「顶端整行注水能否流到底端」。这才是 ``p_c`` 所用的判据，它的
+  ``P(p) = 1/2`` 交点才落在 ``p_c`` 上；该判据**与注水点无关**（选它时 ``inject``
+  只影响单次动画的起点，不影响统计结果）。
+* ``area`` **面积判据**：浸润节点数占总节点数的比例 ≥ ``threshold``。
+  它回答的是「一次注水能浸透多大范围」，**没有固定的临界值**：交点随所设比例、
+  网格尺寸、注水方式一起变化（比例越大交点越高，单点注水还会额外要求
+  「起点恰好落在巨簇里」）。
+
+关于临界值
+----------
+``p_c`` 是**无限大格子的性质**，只取决于格子的连接结构与方向模式，与网格是正方形
+还是矩形、以及注水点在哪里都**无关**（后两者只影响有限尺寸下的表观曲线形状）
+—— 这些结论都**只在 ``span`` 判据下成立**。
+已知的解析值 / 文献值见 :data:`THEORETICAL_PC_BY_COMBO`，文献不全的组合给出蒙特卡洛
+估计值（见 :data:`ESTIMATED_PC_BY_COMBO`，界面会标注为「估计值」）。
 
 本模块只依赖 Python 标准库，可单独导入使用（不含任何绘图/GUI 代码）。
 """
 
 from __future__ import annotations
 
+import math
 import random
 import time
 from collections import deque
@@ -31,6 +65,20 @@ from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Un
 
 __all__ = [
     "THEORETICAL_PC",
+    "THEORETICAL_PC_BY_LATTICE",
+    "THEORETICAL_PC_BY_COMBO",
+    "ESTIMATED_PC_BY_COMBO",
+    "DEFAULT_THRESHOLD",
+    "CRITERIA",
+    "CRITERION_NAMES",
+    "CRITERION_DESCRIPTIONS",
+    "DEFAULT_CRITERION",
+    "LATTICES",
+    "LATTICE_NAMES",
+    "DIRECTIONS",
+    "DIRECTION_NAMES",
+    "INJECT_MODES",
+    "INJECT_NAMES",
     "UnionFind",
     "PercolationGrid",
     "SimResult",
@@ -38,10 +86,86 @@ __all__ = [
     "batch_percolation_probability",
     "scan_curve",
     "encode_edges",
+    "lattice_layout",
 ]
 
-#: 二维方格网键渗流（bond percolation）的理论临界概率
+#: 方格网键渗流的经典临界值（保留旧名，便于外部引用；对应 ``criterion="span"``）
 THEORETICAL_PC: float = 0.5
+
+#: 成功判据：``span`` = 存在纵贯簇（对应 p_c）/ ``area`` = 浸润比例达到阈值
+CRITERIA: Tuple[str, ...] = ("span", "area")
+
+#: 成功判据的短名（用于结果文本）
+CRITERION_NAMES: Dict[str, str] = {
+    "span": "贯通判据",
+    "area": "面积判据",
+}
+
+#: 成功判据的完整说明（界面与日志用）
+CRITERION_DESCRIPTIONS: Dict[str, str] = {
+    "span": "贯通判据：整张网格存在从顶行连通到底行的纵贯簇（这就是 p_c 所对应的判据）",
+    "area": "面积判据：浸润节点占总节点的比例达到阈值（无固定临界值，随比例/尺寸/注水方式变化）",
+}
+
+#: 默认成功判据：贯通判据（这才是 p_c 所对应的判据）
+DEFAULT_CRITERION: str = "span"
+
+#: ``criterion="area"`` 时判定「浸透全网格」的浸润比例阈值
+DEFAULT_THRESHOLD: float = 0.5
+
+#: 「格子 -> 无向键渗流临界值」的简表（保留旧名）
+THEORETICAL_PC_BY_LATTICE: Dict[str, float] = {
+    "square": 0.5,                                   # 1/2（解析）
+    "triangular": 2.0 * math.sin(math.pi / 18.0),    # ≈ 0.347296（解析）
+}
+
+#: (格子, 方向) -> 临界值：解析解或文献值
+#:
+#: 这些值都是**贯通判据**（``criterion="span"``）下的临界值 —— 即「水从顶行贯通到底行」
+#: 的相变点。面积判据没有对应的固定值，所以不要把它套到这里。
+THEORETICAL_PC_BY_COMBO: Dict[Tuple[str, str], float] = {
+    ("square", "undirected"): 0.5,                       # 解析：1/2
+    ("triangular", "undirected"): 2.0 * math.sin(math.pi / 18.0),   # 解析
+    ("square", "down_right"): 0.6447,                    # 经典有向渗流（2 出边）
+    ("square", "down_left"): 0.6447,                     # 与上者镜像同值
+}
+
+#: (格子, 方向) -> 蒙特卡洛估计值（这些组合没有已知解析解，界面会标注「估计值」）
+#:
+#: 估计方法：在 n = 320 / 640 的方形网格上二分求 P(p) = 0.5 的交点（n=640 与 n=320
+#: 的结果一致到 0.001，说明剩余有限尺寸偏差很小）。注意有向渗流的表观交点通常
+#: 从下方逼近真值，例如 (square, down_right) 在 n = 60/160/320 时分别测得
+#: 0.627 / 0.633 / 0.641，正在逼近文献值 0.6447。
+ESTIMATED_PC_BY_COMBO: Dict[Tuple[str, str], float] = {
+    ("square", "no_up"): 0.537,
+    ("triangular", "no_up"): 0.397,
+    ("triangular", "down_right"): 0.453,
+    ("triangular", "down_left"): 0.453,
+}
+
+#: 支持的格子类型与中文名
+LATTICES: Tuple[str, ...] = ("square", "triangular")
+LATTICE_NAMES: Dict[str, str] = {
+    "square": "方格网",
+    "triangular": "三角网",
+}
+
+#: 方向模式与中文名
+DIRECTIONS: Tuple[str, ...] = ("undirected", "no_up", "down_right", "down_left")
+DIRECTION_NAMES: Dict[str, str] = {
+    "undirected": "无向（四面流动）",
+    "no_up": "不允许向上",
+    "down_right": "只允许向下/向右",
+    "down_left": "只允许向下/向左",
+}
+
+#: 注水方式与中文名
+INJECT_MODES: Tuple[str, ...] = ("top", "center", "random")
+INJECT_NAMES: Dict[str, str] = {
+    "top": "顶端整行",
+    "center": "中心单点",
+    "random": "随机单点",
+}
 
 #: 随机源可以传入 None / int（种子）/ random.Random 实例
 RngLike = Union[None, int, random.Random]
@@ -57,6 +181,10 @@ def _resolve_rng(rng: RngLike = None) -> random.Random:
     if rng is None:
         return random.Random()
     return random.Random(rng)
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return low if value < low else (high if value > high else value)
 
 
 class UnionFind:
@@ -99,20 +227,39 @@ class UnionFind:
 class SimResult:
     """一次完整模拟（单次生成 + 渗透）的结果，供可视化使用。"""
 
-    size: int
+    rows: int
+    cols: int
     p: float
+    #: 本次模拟是否从注水点贯通到底端（也就是「水到达底端整行」）
     percolates: bool
-    #: 所有被浸润的节点索引（行优先：index = row * size + col）
+    #: 所有被浸润的节点索引（行优先：index = row * cols + col）
     wet: List[int] = field(default_factory=list)
-    #: 按 BFS 层分组的浸润节点，layers[k] 表示距顶端 k 步的节点
+    #: 按 BFS 层分组的浸润节点，layers[k] 表示距注水点 k 步的节点
     layers: List[List[int]] = field(default_factory=list)
+    #: 本次实际使用的注水点（指定注水点时与 ``inject`` 的默认选择不同）
+    origins: List[int] = field(default_factory=list)
+    #: 整张网格是否存在纵贯簇（顶行 ↔ 底行，与注水点无关）
+    spans: bool = False
+    #: 本次「是否成功」采用的是哪种判据：``span`` / ``area``
+    criterion: str = DEFAULT_CRITERION
+    #: ``criterion="area"`` 时的浸润比例阈值
+    threshold: float = DEFAULT_THRESHOLD
     open_edge_count: int = 0
     total_edge_count: int = 0
     elapsed: float = 0.0
 
     @property
+    def size(self) -> int:
+        """行数（保留旧名，便于外部沿用 ``result.size``）。"""
+        return self.rows
+
+    @property
+    def shape(self) -> Tuple[int, int]:
+        return self.rows, self.cols
+
+    @property
     def node_count(self) -> int:
-        return self.size * self.size
+        return self.rows * self.cols
 
     @property
     def wet_count(self) -> int:
@@ -120,7 +267,7 @@ class SimResult:
 
     @property
     def wet_ratio(self) -> float:
-        """浸润节点占全部节点的比例。"""
+        """浸润节点占全部节点的比例（面积判据用的量）。"""
         return self.wet_count / self.node_count if self.node_count else 0.0
 
     @property
@@ -133,22 +280,67 @@ class SimResult:
         """水渗透的层数（BFS 最大层数）。"""
         return len(self.layers)
 
+    @property
+    def criterion_name(self) -> str:
+        return CRITERION_NAMES.get(self.criterion, self.criterion)
+
+    @property
+    def engulfed(self) -> bool:
+        """**面积判据**是否成立：浸润节点占总节点的比例达到 ``threshold``。"""
+        return self.wet_ratio >= self.threshold
+
+    @property
+    def success(self) -> bool:
+        """按本次采用的 ``criterion`` 判定「是否成功」。"""
+        return self.spans if self.criterion == "span" else self.engulfed
+
 
 @dataclass
 class BatchResult:
     """一批独立重复实验的统计结果。"""
 
     p: float
-    size: int
+    rows: int
+    cols: int
     trials: int
     success: int
-    directed: bool = False
+    criterion: str = DEFAULT_CRITERION
+    threshold: float = DEFAULT_THRESHOLD
+    direction: str = "undirected"
+    lattice: str = "square"
+    inject: str = "top"
+    #: 各次实验浸润节点比例之和（用于计算平均浸润比例）
+    ratio_sum: float = 0.0
     elapsed: float = 0.0
 
     @property
+    def size(self) -> int:
+        return self.rows
+
+    @property
+    def shape(self) -> Tuple[int, int]:
+        return self.rows, self.cols
+
+    @property
+    def criterion_name(self) -> str:
+        return CRITERION_NAMES.get(self.criterion, self.criterion)
+
+    @property
     def probability(self) -> float:
-        """渗流发生频率（对渗流概率的蒙特卡洛估计）。"""
+        """「成功」的发生频率（对概率的蒙特卡洛估计）。
+
+        ``criterion="span"`` 时统计的是**存在纵贯簇**的频率（交点即 ``p_c``）；
+        ``criterion="area"`` 时统计的是浸润比例达到阈值的频率（无固定交点）。
+        """
         return self.success / self.trials if self.trials else 0.0
+
+    @property
+    def mean_ratio(self) -> float:
+        """平均浸润比例（随 p 上升而急剧抬升，比频率更平滑）。
+
+        注意：这是**浸润节点占全部节点**的比例，与判据无关，始终可比较。
+        """
+        return self.ratio_sum / self.trials if self.trials else 0.0
 
     @property
     def stderr(self) -> float:
@@ -158,128 +350,399 @@ class BatchResult:
 
 
 class PercolationGrid:
-    """二维方格网边渗流模型。
+    """格子网边渗流模型（方格网 / 三角网，方形 / 矩形，四种方向模式，三种注水方式）。
 
     参数
     ----
-    size : int
-        网格边长（节点数为 ``size × size``）。
+    rows, cols : int
+        行数与列数；``cols`` 省略时取 ``rows``（正方形网格）。
     p : float
         每条边的流通概率，取值 ``[0, 1]``。
     rng : None | int | random.Random
         随机源，可以是种子（便于复现）。
-    directed : bool
-        ``False``（默认）= 标准无向渗流，水可上下左右流动；
-        ``True`` = 有向渗流，只允许向下 / 向左 / 向右（原题的严格版本）。
+    direction : str
+        ``undirected`` / ``no_up`` / ``down_right`` / ``down_left``，见模块文档。
+    lattice : str
+        ``square``（4 邻域）或 ``triangular``（6 邻域）。
+    inject : str
+        ``top``（顶端整行）/ ``center``（中心单点）/ ``random``（随机单点）。
+    criterion : str
+        ``span``（贯通判据：是否存在纵贯簇，对应 ``p_c``）/ ``area``（面积判据：浸润比例 ≥
+        ``threshold``）。默认 ``span``。
+    threshold : float
+        ``criterion="area"`` 时判定「浸透全网格」的浸润比例，默认 0.5。
     """
 
     def __init__(
         self,
-        size: int = 30,
+        rows: int = 30,
+        cols: Optional[int] = None,
         p: float = 0.5,
         rng: RngLike = None,
-        directed: bool = False,
+        direction: str = "undirected",
+        lattice: str = "square",
+        inject: str = "top",
+        criterion: str = DEFAULT_CRITERION,
+        threshold: float = DEFAULT_THRESHOLD,
     ) -> None:
-        if size < 2:
-            raise ValueError("网格尺寸至少为 2")
-        self.size = int(size)
-        self.p = min(1.0, max(0.0, float(p)))
-        self.directed = bool(directed)
+        if int(rows) < 2:
+            raise ValueError("行数至少为 2")
+        if cols is not None and int(cols) < 2:
+            raise ValueError("列数至少为 2")
+        if lattice not in LATTICES:
+            raise ValueError(f"未知的格子类型：{lattice}（可选：{'、'.join(LATTICES)}）")
+        if direction not in DIRECTIONS:
+            raise ValueError(f"未知的方向模式：{direction}（可选：{'、'.join(DIRECTIONS)}）")
+        if inject not in INJECT_MODES:
+            raise ValueError(f"未知的注水方式：{inject}（可选：{'、'.join(INJECT_MODES)}）")
+        if criterion not in CRITERIA:
+            raise ValueError(f"未知的成功判据：{criterion}（可选：{'、'.join(CRITERIA)}）")
+
+        self.rows = int(rows)
+        self.cols = int(cols) if cols is not None else int(rows)
+        self.p = _clamp(float(p), 0.0, 1.0)
+        self.direction = direction
+        self.lattice = lattice
+        self.inject = inject
+        self.criterion = criterion
+        self.threshold = _clamp(float(threshold), 0.05, 1.0)
         self.rng: random.Random = _resolve_rng(rng)
+
         #: h_edge[r][c] 表示 (r, c) 与 (r, c+1) 之间的水平边是否流通
         self.h_edge: List[List[bool]] = []
-        #: v_edge[r][c] 表示 (r, c) 与 (r+1, c) 之间的垂直边是否流通
+        #: 方格网：v_edge[r][c] 表示 (r, c) 与 (r+1, c) 之间的垂直边是否流通
         self.v_edge: List[List[bool]] = []
+        #: 三角网：dl_edge[r][c] 表示 (r, c) 与 (r+1, c-1+shift) 之间的左下斜边
+        self.dl_edge: List[List[bool]] = []
+        #: 三角网：dr_edge[r][c] 表示 (r, c) 与 (r+1, c+shift) 之间的右下斜边
+        self.dr_edge: List[List[bool]] = []
+        #: inject == "random" 时使用的随机注水点（随网格一起生成，便于复现）
+        self._random_source: Optional[int] = None
+        #: 当前网格「是否存在纵贯簇」的缓存（None 表示尚未判定）
+        self._spanning: Optional[bool] = None
         self.regenerate()
+
+    # ------------------------------------------------------------------
+    # 基本几何
+    # ------------------------------------------------------------------
+    @property
+    def size(self) -> int:
+        """行数（保留旧名，便于外部沿用 ``grid.size``）。"""
+        return self.rows
+
+    @property
+    def shape(self) -> Tuple[int, int]:
+        return self.rows, self.cols
+
+    @property
+    def node_count(self) -> int:
+        return self.rows * self.cols
+
+    @property
+    def is_square(self) -> bool:
+        return self.rows == self.cols
+
+    @property
+    def lattice_name(self) -> str:
+        return LATTICE_NAMES[self.lattice]
+
+    @property
+    def direction_name(self) -> str:
+        return DIRECTION_NAMES[self.direction]
+
+    @property
+    def inject_name(self) -> str:
+        return INJECT_NAMES[self.inject]
+
+    @property
+    def criterion_name(self) -> str:
+        return CRITERION_NAMES[self.criterion]
+
+    @property
+    def pc_applies(self) -> bool:
+        """当前判据下 ``p_c`` 是否有意义（只有贯通判据才对应 ``p_c``）。"""
+        return self.criterion == "span"
+
+    @property
+    def theoretical_pc(self) -> Optional[float]:
+        """当前（格子, 方向）组合的临界概率；文献与估计都没有时返回 None。"""
+        key = (self.lattice, self.direction)
+        if key in THEORETICAL_PC_BY_COMBO:
+            return THEORETICAL_PC_BY_COMBO[key]
+        return ESTIMATED_PC_BY_COMBO.get(key)
+
+    @property
+    def pc_is_estimate(self) -> bool:
+        """临界值是蒙特卡洛估计（而非解析解 / 文献值）时为 True。"""
+        return (self.lattice, self.direction) not in THEORETICAL_PC_BY_COMBO
+
+    @property
+    def pc_label(self) -> str:
+        """临界值的展示文本（随判据变化：面积判据下没有固定阈值）。"""
+        if not self.pc_applies:
+            return ("面积判据没有固定临界值：交点随所设比例、网格尺寸、注水方式变化，"
+                    "只有贯通判据才对应 p_c。")
+        pc = self.theoretical_pc
+        if pc is None:
+            return "该组合暂无已知阈值"
+        return f"贯通判据：p_c {'≈' if self.pc_is_estimate else '='} {pc:.4f}" + (
+            "（估计值）" if self.pc_is_estimate else ""
+        )
+
+    def index(self, row: int, col: int) -> int:
+        """二维坐标 -> 一维节点索引。"""
+        return row * self.cols + col
+
+    def coord(self, index: int) -> Tuple[int, int]:
+        """一维节点索引 -> (行, 列)。"""
+        return divmod(index, self.cols)
 
     # ------------------------------------------------------------------
     # 网格构建
     # ------------------------------------------------------------------
-    @property
-    def node_count(self) -> int:
-        return self.size * self.size
-
-    def index(self, row: int, col: int) -> int:
-        """二维坐标 -> 一维节点索引。"""
-        return row * self.size + col
-
-    def coord(self, index: int) -> Tuple[int, int]:
-        """一维节点索引 -> (行, 列)。"""
-        return divmod(index, self.size)
-
     def regenerate(self, p: Optional[float] = None, seed: Optional[int] = None) -> "PercolationGrid":
-        """重新随机生成所有边（每条边以概率 p 独立判定是否流通）。"""
+        """重新随机生成所有边（每条边以概率 p 独立判定是否流通）。
+
+        ``inject == "random"`` 时同时重新随机挑选注水点，因此同一个网格上的
+        多次判定结果保持一致，重新生成才会换注水点。
+        """
         if p is not None:
-            self.p = min(1.0, max(0.0, float(p)))
+            self.p = _clamp(float(p), 0.0, 1.0)
         if seed is not None:
             self.rng = random.Random(seed)
 
-        n, prob, rnd = self.size, self.p, self.rng.random
-        self.h_edge = [[rnd() < prob for _ in range(n - 1)] for _ in range(n)]
-        self.v_edge = [[rnd() < prob for _ in range(n)] for _ in range(n - 1)]
+        rows, cols, prob, rnd = self.rows, self.cols, self.p, self.rng.random
+        self.h_edge = [[rnd() < prob for _ in range(cols - 1)] for _ in range(rows)]
+
+        if self.lattice == "square":
+            self.v_edge = [[rnd() < prob for _ in range(cols)] for _ in range(rows - 1)]
+            self.dl_edge = []
+            self.dr_edge = []
+        else:
+            self.v_edge = []
+            dl_rows: List[List[bool]] = []
+            dr_rows: List[List[bool]] = []
+            for r in range(rows - 1):
+                shift = r % 2
+                dl_row: List[bool] = []
+                dr_row: List[bool] = []
+                for c in range(cols):
+                    jl, jr = c - 1 + shift, c + shift
+                    dl_row.append(rnd() < prob if 0 <= jl < cols else False)
+                    dr_row.append(rnd() < prob if 0 <= jr < cols else False)
+                dl_rows.append(dl_row)
+                dr_rows.append(dr_row)
+            self.dl_edge = dl_rows
+            self.dr_edge = dr_rows
+
+        if self.inject == "random":
+            self._random_source = self.rng.randrange(self.node_count)
+        self._spanning = None               # 网格换了，贯通判定缓存作废
         return self
 
     def total_edge_count(self) -> int:
-        """方格网中所有的边数：2 * n * (n - 1)。"""
-        return 2 * self.size * (self.size - 1)
+        """网格中的全部边数（方格网 ``2·rows·cols − rows − cols``）。"""
+        rows, cols = self.rows, self.cols
+        horizontal = rows * (cols - 1)
+        if self.lattice == "square":
+            return horizontal + (rows - 1) * cols
+        return horizontal + (rows - 1) * (2 * cols - 1)
 
     def open_edge_count(self) -> int:
         """实际流通的边数。"""
-        return sum(sum(row) for row in self.h_edge) + sum(sum(row) for row in self.v_edge)
+        total = sum(sum(row) for row in self.h_edge)
+        if self.lattice == "square":
+            return total + sum(sum(row) for row in self.v_edge)
+        return total + sum(sum(row) for row in self.dl_edge) + sum(sum(row) for row in self.dr_edge)
+
+    def iter_all_edges(self) -> Iterator[Tuple[int, int]]:
+        """迭代所有边（不论是否流通），返回 (节点a, 节点b)，a < b。"""
+        rows, cols = self.rows, self.cols
+        for r in range(rows):
+            base = r * cols
+            for c in range(cols - 1):
+                yield base + c, base + c + 1
+
+        if self.lattice == "square":
+            for r in range(rows - 1):
+                base = r * cols
+                for c in range(cols):
+                    yield base + c, base + c + cols
+            return
+
+        for r in range(rows - 1):
+            base = r * cols
+            nxt = base + cols
+            shift = r % 2
+            for c in range(cols):
+                jl = c - 1 + shift
+                if 0 <= jl < cols:
+                    yield base + c, nxt + jl
+                jr = c + shift
+                if 0 <= jr < cols:
+                    yield base + c, nxt + jr
+
+    def is_open(self, a: int, b: int) -> bool:
+        """判断节点 a、b 之间的边是否流通（与参数顺序无关）。"""
+        if a > b:
+            a, b = b, a
+        cols = self.cols
+        r, c = divmod(a, cols)
+
+        if self.lattice == "square":
+            if b == a + 1:
+                return c + 1 < cols and bool(self.h_edge[r][c])
+            if b == a + cols:
+                return bool(self.v_edge[r][c])
+            return False
+
+        # 三角网：先判同一行内的水平边（行末与下一行行首的索引也相差 1，需排除）
+        if b == a + 1 and c + 1 < cols:
+            return bool(self.h_edge[r][c])
+
+        j = b - a - cols + c               # 下端节点在下一行中的列号
+        if not 0 <= j < cols:
+            return False
+        shift = r % 2
+        if j == c - 1 + shift:
+            return bool(self.dl_edge[r][c])
+        if j == c + shift:
+            return bool(self.dr_edge[r][c])
+        return False
 
     def iter_open_edges(self) -> Iterator[Tuple[int, int]]:
         """迭代所有流通边，返回 (节点a, 节点b)。"""
-        n = self.size
-        for r in range(n):
-            base = r * n
-            row_h = self.h_edge[r]
-            for c in range(n - 1):
-                if row_h[c]:
-                    yield base + c, base + c + 1
-        for r in range(n - 1):
-            base = r * n
-            row_v = self.v_edge[r]
-            for c in range(n):
-                if row_v[c]:
-                    yield base + c, base + c + n
+        for a, b in self.iter_all_edges():
+            if self.is_open(a, b):
+                yield a, b
+
+    # ------------------------------------------------------------------
+    # 邻居（受方向模式约束）
+    # ------------------------------------------------------------------
+    def direction_allows(self, dr: int, dc: int) -> bool:
+        """方向模式是否允许「行变化 dr、列变化 dc」这一步。"""
+        mode = self.direction
+        if mode == "undirected":
+            return True
+        if mode == "no_up":
+            return dr >= 0
+        if mode == "down_right":
+            return dr > 0 or (dr == 0 and dc > 0)
+        if mode == "down_left":
+            return dr > 0 or (dr == 0 and dc < 0)
+        return True
+
+    def _candidate_neighbors(self, index: int) -> Iterator[Tuple[int, int, int]]:
+        """产出所有**相连**的邻居及其 (行变化, 列变化)，供方向过滤使用。"""
+        rows, cols = self.rows, self.cols
+        r, c = divmod(index, cols)
+
+        if c + 1 < cols and self.h_edge[r][c]:
+            yield index + 1, 0, 1
+        if c > 0 and self.h_edge[r][c - 1]:
+            yield index - 1, 0, -1
+
+        if self.lattice == "square":
+            if r + 1 < rows and self.v_edge[r][c]:
+                yield index + cols, 1, 0
+            if r > 0 and self.v_edge[r - 1][c]:
+                yield index - cols, -1, 0
+            return
+
+        shift = r % 2
+        if r + 1 < rows:
+            jl = c - 1 + shift
+            if 0 <= jl < cols and self.dl_edge[r][c]:
+                yield r * cols + cols + jl, 1, jl - c
+            jr = c + shift
+            if 0 <= jr < cols and self.dr_edge[r][c]:
+                yield r * cols + cols + jr, 1, jr - c
+        if r > 0:
+            pr, pshift = r - 1, (r - 1) % 2
+            kl = c + 1 - pshift          # 上一行的左下斜边正好指向当前节点
+            if 0 <= kl < cols and self.dl_edge[pr][kl]:
+                yield pr * cols + kl, -1, kl - c
+            kr = c - pshift              # 上一行的右下斜边正好指向当前节点
+            if 0 <= kr < cols and self.dr_edge[pr][kr]:
+                yield pr * cols + kr, -1, kr - c
 
     def neighbors(self, index: int) -> Iterator[int]:
-        """沿流通边可直接到达的邻居节点。
+        """沿流通边、且符合方向模式的可达邻居。"""
+        for nb, dr, dc in self._candidate_neighbors(index):
+            if self.direction_allows(dr, dc):
+                yield nb
 
-        标准模式（无向）向四个方向扩散；有向模式只允许 下 / 左 / 右。
+    # ------------------------------------------------------------------
+    # 注水点与出口
+    # ------------------------------------------------------------------
+    def source_nodes(self) -> List[int]:
+        """注水点：顶端整行 / 中心单点 / 随机单点。"""
+        rows, cols = self.rows, self.cols
+        if self.inject == "center":
+            return [(rows // 2) * cols + cols // 2]
+        if self.inject == "random":
+            if self._random_source is None:
+                self._random_source = self.rng.randrange(self.node_count)
+            return [self._random_source]
+        return list(range(cols))
+
+    def top_row_nodes(self) -> List[int]:
+        """顶端整行（纵贯判据的入口，与 ``inject`` 无关）。"""
+        return list(range(self.cols))
+
+    def sink_nodes(self) -> List[int]:
+        """出口：底端整行。"""
+        start = (self.rows - 1) * self.cols
+        return list(range(start, start + self.cols))
+
+    # ------------------------------------------------------------------
+    # 贯通判定（criterion == "span"）
+    # ------------------------------------------------------------------
+    def has_spanning_cluster(self) -> bool:
+        """整张网格是否存在**纵贯簇**（同时连通顶行与底行的连通簇）。
+
+        这就是 ``p_c`` 所对应的判据：水从顶行整行出发，能否沿流通边到达底行。
+        判定结果会在同一张网格上缓存，重新生成网格后失效。
+
+        **与注水点无关**：``inject`` 只决定单次动画从哪儿开始；判据问的是
+        「整张网格有没有纵贯的水路」。（当 ``inject == "top"`` 时，它与
+        ``percolates()`` 完全等价。）
         """
-        n = self.size
-        r, c = divmod(index, n)
-        if c + 1 < n and self.h_edge[r][c]:
-            yield index + 1
-        if c > 0 and self.h_edge[r][c - 1]:
-            yield index - 1
-        if r + 1 < n and self.v_edge[r][c]:
-            yield index + n
-        if r > 0 and not self.directed and self.v_edge[r - 1][c]:
-            yield index - n
+        if self._spanning is None:
+            self._spanning = self._scan_span()
+        return self._spanning
+
+    def _scan_span(self) -> bool:
+        """顶行整行 → 底行的连通性判定（无向走并查集，其余方向模式走 BFS）。"""
+        top = self.top_row_nodes()
+        if self.direction == "undirected":
+            return self._percolates_uf(top)
+        return self._percolates_bfs(top)
 
     # ------------------------------------------------------------------
     # 渗流判定
     # ------------------------------------------------------------------
-    def simulate(self) -> SimResult:
-        """完整模拟一次：从顶端所有节点同时注水，返回浸润节点与分层信息。
+    def simulate(self, origins: Optional[Sequence[int]] = None) -> SimResult:
+        """完整模拟一次：从注水点开始蔓延，返回浸润节点与分层信息。
 
-        采用多源 BFS，天然支持无向与有向两种模式；BFS 的层号即水到达该节点的步数，
-        可直接用于逐层渲染渗透过程。
+        采用 BFS，天然支持四种方向模式、两种格子与矩形网格；BFS 的层号即水到达该
+        节点的步数，可直接用于逐层渲染渗透过程。
+
+        ``origins`` 省略时按 ``inject`` 设定自动挑选注水点；给出时从这些节点出发
+        （供界面「点击画布指定注水点」使用）。
         """
         started = time.perf_counter()
-        n = self.size
+        rows, cols = self.rows, self.cols
+        source = list(origins) if origins is not None else self.source_nodes()
         dist: Dict[int, int] = {}
         layers: List[List[int]] = []
         queue: deque = deque()
 
-        # 顶端所有节点同时作为水源
-        for c in range(n):
-            dist[c] = 0
-            queue.append(c)
+        for idx in source:
+            dist[idx] = 0
+            queue.append(idx)
 
-        last_row_start = (n - 1) * n
+        last_row_start = (rows - 1) * cols
         percolates = False
 
         while queue:
@@ -289,7 +752,7 @@ class PercolationGrid:
                 layers.append([])
             layers[d].append(idx)
             if idx >= last_row_start:
-                percolates = True  # 水已经到达底端
+                percolates = True          # 水已经到达底端
             nd = d + 1
             for nb in self.neighbors(idx):
                 if nb not in dist:
@@ -297,69 +760,149 @@ class PercolationGrid:
                     queue.append(nb)
 
         return SimResult(
-            size=n,
+            rows=rows,
+            cols=cols,
             p=self.p,
             percolates=percolates,
             wet=list(dist.keys()),
             layers=layers,
+            origins=source,
+            spans=self.has_spanning_cluster(),
+            criterion=self.criterion,
+            threshold=self.threshold,
             open_edge_count=self.open_edge_count(),
             total_edge_count=self.total_edge_count(),
             elapsed=time.perf_counter() - started,
         )
 
-    def percolates_uf(self) -> bool:
-        """用并查集快速判定是否渗流（仅适用于无向模式，批量统计的加速路径）。"""
-        n = self.size
-        uf = UnionFind(n * n + 2)
-        source, sink = n * n, n * n + 1
+    def wet_size(self, origins: Optional[Sequence[int]] = None) -> int:
+        """只统计浸润节点数（面积判据与批量统计的高速路径，不记录分层）。"""
+        seen = bytearray(self.node_count)
+        queue: deque = deque()
+        for idx in (self.source_nodes() if origins is None else origins):
+            if not seen[idx]:
+                seen[idx] = 1
+                queue.append(idx)
+        count = 0
+        while queue:
+            idx = queue.popleft()
+            count += 1
+            for nb in self.neighbors(idx):
+                if not seen[nb]:
+                    seen[nb] = 1
+                    queue.append(nb)
+        return count
 
-        for c in range(n):                       # 虚拟水源连接顶端整行
-            uf.union(source, c)
+    def _percolates_uf(self, sources: Sequence[int]) -> bool:
+        """并查集判定：给定的注水点集合能否连通到底端整行（仅无向模式有效）。"""
+        uf = UnionFind(self.node_count + 2)
+        source, sink = self.node_count, self.node_count + 1
 
-        for r in range(n - 1):                   # 水平边 + 垂直边
-            base = r * n
-            row_h = self.h_edge[r]
-            for c in range(n - 1):
-                if row_h[c]:
-                    uf.union(base + c, base + c + 1)
-            row_v = self.v_edge[r]
-            for c in range(n):
-                if row_v[c]:
-                    uf.union(base + c, base + c + n)
+        for idx in sources:                      # 虚拟水源连接注水点
+            uf.union(source, idx)
 
-        last_base = (n - 1) * n                  # 最后一行只有水平边
-        row_h = self.h_edge[n - 1]
-        for c in range(n - 1):
-            if row_h[c]:
-                uf.union(last_base + c, last_base + c + 1)
-        for c in range(n):                       # 虚拟出口连接底端整行
-            uf.union(last_base + c, sink)
+        for a, b in self.iter_open_edges():      # 所有流通边
+            uf.union(a, b)
+
+        for idx in self.sink_nodes():            # 虚拟出口连接底端整行
+            uf.union(idx, sink)
 
         return uf.connected(source, sink)
 
-    def percolates(self) -> bool:
-        """判断顶端的水能否流到底端（自动选择最快的判定路径）。"""
-        if self.directed:
-            return self.simulate().percolates
-        return self.percolates_uf()
+    def percolates_uf(self) -> bool:
+        """用并查集快速判定（仅无向模式有效，批量统计的加速路径）。"""
+        return self._percolates_uf(self.source_nodes())
+
+    def _percolates_bfs(self, sources: Sequence[int]) -> bool:
+        """轻量 BFS：给定的注水点集合能否到达底端整行（不记录分层）。"""
+        rows, cols = self.rows, self.cols
+        last_row_start = (rows - 1) * cols
+        seen = bytearray(self.node_count)
+        queue: deque = deque()
+        for idx in sources:
+            if not seen[idx]:
+                seen[idx] = 1
+                queue.append(idx)
+
+        while queue:
+            idx = queue.popleft()
+            if idx >= last_row_start:
+                return True
+            for nb in self.neighbors(idx):
+                if not seen[nb]:
+                    seen[nb] = 1
+                    queue.append(nb)
+        return False
+
+    def percolates_bfs(self) -> bool:
+        """只用 BFS 判断可达性（不记录分层，比 :meth:`simulate` 轻量）。"""
+        return self._percolates_bfs(self.source_nodes())
+
+    def percolates(self, origins: Optional[Sequence[int]] = None) -> bool:
+        """判断水能否从注水点流到底端。
+
+        无向模式走并查集（最快），其余方向模式走轻量 BFS。
+        ``origins`` 省略时按 ``inject`` 自动挑选注水点。
+        """
+        if origins is None:
+            if self.direction == "undirected":
+                return self.percolates_uf()
+            return self.percolates_bfs()
+        if self.direction == "undirected":
+            return self._percolates_uf(list(origins))
+        return self._percolates_bfs(list(origins))
+
+
+def lattice_layout(rows: int, cols: Optional[int] = None,
+                   lattice: str = "square") -> List[Tuple[float, float]]:
+    """返回每个节点在图上的**单位坐标**（供界面层等比缩放后绘制）。
+
+    * 方格网：``x = c``、``y = r``，行距 1；
+    * 三角网：奇数行右移半格、行距 ``√3 / 2``，恰好铺成等边三角形。
+
+    返回列表的下标即节点索引（``row * cols + col``）。
+    """
+    columns = int(cols) if cols is not None else int(rows)
+    row_h = 1.0 if lattice == "square" else math.sqrt(3.0) / 2.0
+    half = 0.0 if lattice == "square" else 0.5
+    pts: List[Tuple[float, float]] = []
+    for r in range(int(rows)):
+        shift = half * (r % 2)
+        for c in range(columns):
+            pts.append((c + shift, r * row_h))
+    return pts
 
 
 # ----------------------------------------------------------------------
 # 批量统计与扫描
 # ----------------------------------------------------------------------
 def batch_percolation_probability(
-    size: int = 40,
+    rows: int = 40,
+    cols: Optional[int] = None,
     p: float = 0.5,
     trials: int = 1000,
     rng: RngLike = None,
-    directed: bool = False,
+    direction: str = "undirected",
+    lattice: str = "square",
+    inject: str = "top",
+    criterion: str = DEFAULT_CRITERION,
+    threshold: float = DEFAULT_THRESHOLD,
     progress: Optional[ProgressCallback] = None,
     cancel=None,
 ) -> BatchResult:
-    """在固定概率 ``p`` 下独立生成 ``trials`` 个网格并统计渗流频率。
+    """在固定概率 ``p`` 下独立生成 ``trials`` 个网格并统计「成功」频率。
+
+    每次实验都重新生成网格。「成功」由 ``criterion`` 决定：
+
+    * ``criterion="span"``：这张网格上**存在纵贯簇**（顶行 ↔ 底行）。
+      交点即 ``p_c``，且**与注水方式无关**（判据问的是整张网格的性质）；
+    * ``criterion="area"``：按 ``inject`` 挑注水点出发，浸润节点比例 ≥ ``threshold``。
+      交点随比例 / 尺寸 / 注水方式漂移，不是 ``p_c``。
 
     参数
     ----
+    rows, cols, lattice, direction, inject
+        网格尺寸与模型选项，见 :class:`PercolationGrid`。
     progress : callable(done, total, success) | None
         进度回调，每完成一批实验调用一次（在调用者线程内执行）。
     cancel : object | None
@@ -367,16 +910,28 @@ def batch_percolation_probability(
     """
     rng = _resolve_rng(rng)
     trials = max(1, int(trials))
-    grid = PercolationGrid(size=size, p=p, rng=rng, directed=directed)
+    grid = PercolationGrid(
+        rows=rows, cols=cols, p=p, rng=rng, direction=direction,
+        lattice=lattice, inject=inject, criterion=criterion, threshold=threshold,
+    )
     step = max(1, trials // 50)   # 进度回调频率：最多约 50 次
+    span_criterion = criterion == "span"
+    node_count = grid.node_count
     success = 0
+    ratio_sum = 0.0
     done = 0
     started = time.perf_counter()
 
     for i in range(1, trials + 1):
         grid.regenerate()
-        if grid.percolates():
+        if span_criterion:
+            # 贯通判据：整张网格是否存在纵贯水路（与注水点无关）
+            ok = grid.has_spanning_cluster()
+        else:
+            ok = (grid.wet_size() / node_count) >= grid.threshold if node_count else False
+        if ok:
             success += 1
+        ratio_sum += grid.wet_size() / node_count if node_count else 0.0
         done = i
         if progress is not None and (i % step == 0 or i == trials):
             progress(i, trials, success)
@@ -385,24 +940,35 @@ def batch_percolation_probability(
 
     return BatchResult(
         p=p,
-        size=size,
+        rows=grid.rows,
+        cols=grid.cols,
         trials=done,
         success=success,
-        directed=directed,
+        criterion=criterion,
+        threshold=grid.threshold,
+        direction=direction,
+        lattice=lattice,
+        inject=inject,
+        ratio_sum=ratio_sum,
         elapsed=time.perf_counter() - started,
     )
 
 
 def scan_curve(
     p_values: Sequence[float],
-    size: int = 40,
+    rows: int = 40,
+    cols: Optional[int] = None,
     trials: int = 200,
     rng: RngLike = None,
-    directed: bool = False,
+    direction: str = "undirected",
+    lattice: str = "square",
+    inject: str = "top",
+    criterion: str = DEFAULT_CRITERION,
+    threshold: float = DEFAULT_THRESHOLD,
     progress: Optional[Callable[[int, int, BatchResult], None]] = None,
     cancel=None,
 ) -> List[BatchResult]:
-    """扫描一组 ``p`` 值，返回每个 p 对应的渗流概率，用于绘制 P(p) 曲线。
+    """扫描一组 ``p`` 值，返回每个 p 对应的成功概率，用于绘制 P(p) 曲线。
 
     progress : callable(done, total, BatchResult) | None
         每完成一个 p 值调用一次。
@@ -412,7 +978,9 @@ def scan_curve(
     total_points = len(p_values)
     for k, p in enumerate(p_values, start=1):
         res = batch_percolation_probability(
-            size=size, p=p, trials=trials, rng=rng, directed=directed, cancel=cancel
+            rows=rows, cols=cols, p=p, trials=trials, rng=rng, direction=direction,
+            lattice=lattice, inject=inject, criterion=criterion,
+            threshold=threshold, cancel=cancel,
         )
         results.append(res)
         if progress is not None:
@@ -425,21 +993,27 @@ def scan_curve(
 # ----------------------------------------------------------------------
 # 与界面层的数据交换：把边压缩成 0/1 字符串
 # ----------------------------------------------------------------------
-def encode_edges(grid: "PercolationGrid") -> Tuple[str, str]:
-    """把网格的所有边编码成两段 0/1 字符串，供前端极轻量地还原网格。
+def encode_edges(grid: "PercolationGrid") -> Dict[str, str]:
+    """把网格的所有边编码成 0/1 字符串，供前端极轻量地还原网格。
 
-    * ``h``：行优先的水平边，长度 ``n * (n - 1)``，位置 ``r * (n - 1) + c``
-    * ``v``：行优先的垂直边，长度 ``(n - 1) * n``，位置 ``r * n + c``
+    * 方格网：``{"h": ..., "v": ...}``
+      ``h`` 为行优先的水平边（长度 ``rows·(cols−1)``）；``v`` 为垂直边（``(rows−1)·cols``）。
+    * 三角网：``{"h": ..., "dl": ..., "dr": ...}``
+      额外给出两条斜边（各 ``(rows−1)·cols``），列号按 ``shift = r % 2`` 偏移。
 
     相比逐个传边坐标，字符串编码体积小一个数量级，前端解析也只需一次遍历。
     """
     h = "".join("1" if flag else "0" for row in grid.h_edge for flag in row)
-    v = "".join("1" if flag else "0" for row in grid.v_edge for flag in row)
-    return h, v
+    if grid.lattice == "square":
+        v = "".join("1" if flag else "0" for row in grid.v_edge for flag in row)
+        return {"h": h, "v": v}
+    dl = "".join("1" if flag else "0" for row in grid.dl_edge for flag in row)
+    dr = "".join("1" if flag else "0" for row in grid.dr_edge for flag in row)
+    return {"h": h, "dl": dl, "dr": dr}
 
 
 # ----------------------------------------------------------------------
-# 直接运行本文件时的自检：对比实验值与理论阈值
+# 直接运行本文件时的自检：对比实验值与阈值表
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     import sys
@@ -449,18 +1023,78 @@ if __name__ == "__main__":
     except (AttributeError, ValueError):
         pass
 
-    print("=" * 66)
-    print("方格网边渗流自检：理论与实验对照（网格 40×40，每点 400 次）")
-    print(f"理论临界值 p_c = {THEORETICAL_PC}（二维方格网键渗流）")
-    print("=" * 66)
-    print(f"{'概率 p':>8} | {'实验渗流概率':>12} | {'成功/总次数':>14} | 变化趋势")
-    print("-" * 66)
+    def apparent_crossing(rows, direction, trials, lo, hi, rng, steps=8):
+        """二分求「贯通概率 = 1/2」的表观交点（判据固定为贯通）。"""
+        for _ in range(steps):
+            mid = (lo + hi) / 2.0
+            res = batch_percolation_probability(
+                rows=rows, p=mid, trials=trials, rng=rng,
+                direction=direction, criterion="span",
+            )
+            if res.probability < 0.5:
+                lo = mid
+            else:
+                hi = mid
+        return (lo + hi) / 2.0
 
-    shared_rng = random.Random(20260912)
-    for p in (0.2, 0.3, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 0.8):
-        res = batch_percolation_probability(size=40, p=p, trials=400, rng=shared_rng)
-        bar = "█" * int(round(res.probability * 20))
-        print(f"{p:>8.2f} | {res.probability:>12.3f} | {res.success:>6}/{res.trials:<6} | {bar}")
+    print("=" * 78)
+    print("键渗流自检 1：贯通判据的表观交点 vs 理论临界值 p_c")
+    print("=" * 78)
+    print("判据：整张网格上是否存在「顶行 ↔ 底行」的纵贯簇 —— 这才是 p_c 所对应的判据。")
+    print("说明：n = 40 的有限尺寸下，表观交点在 p_c 附近有百分之几的偏差，尺寸越大越紧。")
+    print(f"{'方向模式':<16}{'p_c':>9}{'来源':>7} | {'表观交点':>9} | {'P(p_c)':>8} | {'平均比例':>8}")
+    print("-" * 78)
 
-    print("-" * 66)
-    print("可见：p < p_c 时渗流概率≈0，p > p_c 时迅速趋近 1，在 p_c 附近发生相变。")
+    shared_rng = random.Random(20260913)
+    for direction in DIRECTIONS:
+        grid = PercolationGrid(rows=40, p=0.5, direction=direction)
+        pc = grid.theoretical_pc
+        if pc is None:
+            continue
+        source = "估计" if grid.pc_is_estimate else "文献"
+        mid = batch_percolation_probability(
+            rows=40, p=pc, trials=400, rng=shared_rng,
+            direction=direction, criterion="span",
+        )
+        cross = apparent_crossing(40, direction, 200, pc - 0.10, pc + 0.10, shared_rng)
+        print(f"{DIRECTION_NAMES[direction]:<16}{pc:>9.4f}{source:>7} |"
+              f"{cross:>9.4f} | {mid.probability:>8.3f} | {mid.mean_ratio:>8.3f}")
+    print("-" * 78)
+    print("尺寸依赖（方格网无向）：表观交点随尺寸逼近 p_c，P(p_c) 始终在 0.5 上下抖动。")
+    for n, trials in ((40, 200), (80, 120)):
+        cross = apparent_crossing(n, "undirected", trials, 0.42, 0.58, shared_rng)
+        res = batch_percolation_probability(
+            rows=n, p=THEORETICAL_PC, trials=400, rng=shared_rng, criterion="span"
+        )
+        print(f"  n = {n:<4}表观交点 {cross:.4f} | P(p_c) = {res.probability:.3f}"
+              f"  （p_c = {THEORETICAL_PC:.4f}）")
+    print("-" * 78)
+
+    print("自检 2：面积判据的「交点」不是固定的（方格网 40×40，p = 0.50）")
+    print("说明：浸润节点比例 ≥ 阈值就算成功。阈值越高，要求越苛刻，同一 p 下的概率越低；")
+    print("      把这条曲线与 p 轴的交点找出来，会随阈值（以及网格尺寸、注水方式）漂移。")
+    print(f"{'阈值':>8} | " + " | ".join(f"{INJECT_NAMES[i]:>10}" for i in INJECT_MODES))
+    print("-" * 78)
+    for threshold in (0.1, 0.3, 0.5, 0.7, 0.9):
+        cells: List[str] = []
+        for inject in INJECT_MODES:
+            res = batch_percolation_probability(
+                rows=40, p=0.50, trials=300, rng=shared_rng,
+                inject=inject, criterion="area", threshold=threshold,
+            )
+            cells.append(f"{res.probability:>10.3f}")
+        print(f"{threshold:>8.0%} | " + " | ".join(cells))
+    print("-" * 78)
+
+    print("注水方式对照（方格网 32×32，p = 0.5，各 300 次）")
+    for criterion in CRITERIA:
+        for inject in INJECT_MODES:
+            res = batch_percolation_probability(
+                rows=32, p=0.5, trials=300, rng=shared_rng,
+                inject=inject, criterion=criterion,
+            )
+            print(f"  [{res.criterion_name}] {INJECT_NAMES[inject]:<8}"
+                  f" P = {res.probability:.3f}   平均浸润比例 = {res.mean_ratio:.3f}")
+        print("-" * 78)
+    print("提示：贯通判据下注水方式完全不影响结果（判据问的是整张网格的性质），")
+    print("      面积判据下注水方式影响很大 —— 单点注水额外要求「起点落在巨簇里」。")

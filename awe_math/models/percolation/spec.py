@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-方格网渗流模型 —— 界面元数据与动作处理器
-==========================================
+边渗流模型 —— 界面元数据与动作处理器
+======================================
 
 本文件是「模型」与「界面」之间的唯一桥梁：
 
@@ -18,8 +18,17 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from ...spec import ActionSpec, ModelSpec, ParamSpec
+from .._options import (
+    CRITERION_CHOICES,
+    DIRECTION_CHOICES,
+    LATTICE_CHOICES,
+)
+from .._options import BOND_INJECT_CHOICES as INJECT_CHOICES
 from .model import (
-    THEORETICAL_PC,
+    CRITERIA,
+    CRITERION_DESCRIPTIONS,
+    DEFAULT_CRITERION,
+    DEFAULT_THRESHOLD,
     PercolationGrid,
     batch_percolation_probability,
     encode_edges,
@@ -32,17 +41,23 @@ PARAMS = (
     ParamSpec(
         key="p", label="流通概率 p", kind="float", default=0.5,
         min=0.0, max=1.0, step=0.01, group="网格与边缘",
-        hint="每条边独立流通的概率。p 在 0.5 附近会发生相变。",
+        hint="每条边独立流通的概率。p 越过临界值附近会发生相变。",
     ),
     ParamSpec(
-        key="size", label="网格尺寸 n", kind="int", default=30,
-        min=5, max=60, step=1, unit="×n", group="网格与边缘",
-        hint="节点数 n²，边数 2n(n-1)。尺寸越大，相变越陡峭。",
+        key="rows", label="行数 n", kind="int", default=30,
+        min=5, max=80, step=1, group="网格与边缘",
+        hint="网格行数（节点数 = 行数 × 列数）。行数越大，相变越陡峭。",
     ),
     ParamSpec(
-        key="directed", label="有向渗流（水不能向上）", kind="bool", default=False,
-        group="网格与边缘",
-        hint="关闭 = 标准无向渗流（推荐）；开启 = 只能向下/左/右，用于对比实验。",
+        key="cols", label="列数 m", kind="int", default=30,
+        min=5, max=80, step=1, group="网格与边缘",
+        hint="列数 ≠ 行数 即为矩形网格。临界值与长宽比无关，只改变有限尺寸下的曲线形状。",
+    ),
+    ParamSpec(
+        key="threshold", label="面积判据阈值", kind="choice", default="0.5",
+        choices=("0.3", "0.5", "0.7", "0.9"), group="网格与边缘",
+        hint="只在「面积判据」下生效：浸润节点数达到总节点数的这个比例才算成功。"
+             "阈值取得越大，曲线的交点越往高处跑 —— 它不是一个固定的临界值。",
     ),
     ParamSpec(
         key="seed", label="随机种子（-1 表示随机）", kind="int", default=-1,
@@ -50,14 +65,42 @@ PARAMS = (
         hint="取 ≥0 时同一种子可以复现完全相同的网格与统计结果。",
     ),
     ParamSpec(
+        key="criterion", label="成功判据", kind="choice",
+        default="贯通判据：顶行连通到底行（对应 p_c）",
+        choices=tuple(CRITERION_CHOICES), group="高级选项",
+        hint="两种判据回答的是两个不同的问题：\n"
+             "· 贯通判据：整张网格是否存在顶行↔底行的纵贯簇 —— 这才是 p_c 的判据，"
+             "与注水方式无关；\n"
+             "· 面积判据：浸润面积达到设定比例 —— 没有固定临界值，交点随比例、网格尺寸、"
+             "注水方式一起变。",
+    ),
+    ParamSpec(
+        key="lattice", label="格子类型", kind="choice", default="方格网（4 邻域）",
+        choices=tuple(LATTICE_CHOICES), group="高级选项",
+        hint="三角网每点有 6 个邻居、连接更密，无向键渗流临界值 p_c ≈ 0.3473（方格网为 0.5）。",
+    ),
+    ParamSpec(
+        key="direction", label="方向模式", kind="choice", default="无向（四面流动）",
+        choices=tuple(DIRECTION_CHOICES), group="高级选项",
+        hint="无向 = 标准渗流；不允许向上 = 半有向；只允许向下/向右 = 经典有向渗流。"
+             "方向模式会真正改变临界值，与注水点位置无关。",
+    ),
+    ParamSpec(
+        key="inject", label="注水方式", kind="choice", default="顶端整行注水",
+        choices=tuple(INJECT_CHOICES), group="高级选项",
+        hint="顶端整行 = 经典渗流实验（判定横贯）；中心单点 / 随机单点 = 观察一个水团"
+             "能否长到底端。贯通判据下三种注水方式的统计结果相同（判据只看整张网格），"
+             "面积判据下差别很大。",
+    ),
+    ParamSpec(
         key="trials", label="批量统计次数 N", kind="choice", default="1000",
         choices=("100", "500", "1000", "5000", "10000"), group="批量统计",
-        hint="独立重复实验的次数，次数越多渗流概率估计越准。",
+        hint="独立重复实验的次数：每次重新生成网格，统计「当前判据」的成功频率。",
     ),
     ParamSpec(
         key="scanTrials", label="曲线每点次数", kind="choice", default="200",
         choices=("50", "100", "200", "500", "1000"), group="曲线扫描",
-        hint="P(p) 曲线上每个 p 值模拟多少次。",
+        hint="概率曲线上每个 p 值模拟多少次。",
     ),
     ParamSpec(
         key="scanStep", label="p 扫描步进", kind="choice", default="0.05",
@@ -77,6 +120,11 @@ ACTIONS = (
 )
 
 
+def _pick(mapping: Dict[str, str], value: Any, fallback: str) -> str:
+    """把界面上的中文选项翻译成模型内部取值（无法识别时回退）。"""
+    return mapping.get(str(value), fallback)
+
+
 def _resolve_seed(value: Any) -> Optional[int]:
     """把界面传来的种子转成 ``random`` 可用的形式：-1 表示随机。"""
     try:
@@ -86,22 +134,77 @@ def _resolve_seed(value: Any) -> Optional[int]:
     return None if seed < 0 else seed
 
 
-def _handle_generate(params: Dict[str, Any]) -> Dict[str, Any]:
-    """生成一次网格并完成渗流模拟，返回前端绘图所需的全部数据。"""
-    size = int(params["size"])
-    p = float(params["p"])
-    directed = bool(params["directed"])
+def _resolve_size(raw: Any, default: int) -> int:
+    """把界面传来的行/列数转成合法整数。"""
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        return default
+    return max(2, value)
 
-    grid = PercolationGrid(size=size, p=p, rng=_resolve_seed(params.get("seed")), directed=directed)
-    result = grid.simulate()
-    h_edges, v_edges = encode_edges(grid)
+
+def _resolve_threshold(value: Any) -> float:
+    """把界面传来的阈值字符串转成浮点数（非法时回退到默认值）。"""
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_THRESHOLD
+    return min(1.0, max(0.05, threshold))
+
+
+def _grid_options(params: Dict[str, Any]) -> Dict[str, Any]:
+    """从界面参数里取出与网格相关的选项（含矩形、格子、方向、注水、判据）。"""
+    return {
+        "lattice": _pick(LATTICE_CHOICES, params.get("lattice"), "square"),
+        "direction": _pick(DIRECTION_CHOICES, params.get("direction"), "undirected"),
+        "inject": _pick(INJECT_CHOICES, params.get("inject"), "top"),
+        "criterion": _pick(CRITERION_CHOICES, params.get("criterion"), DEFAULT_CRITERION),
+        "threshold": _resolve_threshold(params.get("threshold")),
+    }
+
+
+def _handle_generate(params: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    """生成一次网格并完成渗流模拟，返回前端绘图所需的全部数据。
+
+    ``payload`` 里可以带上 ``origin``（节点索引），用于「点击网格指定注水点」。
+    """
+    rows = _resolve_size(params.get("rows"), 30)
+    cols = _resolve_size(params.get("cols"), rows)
+    p = float(params["p"])
+    options = _grid_options(params)
+
+    grid = PercolationGrid(
+        rows=rows, cols=cols, p=p, rng=_resolve_seed(params.get("seed")), **options
+    )
+
+    origins: Optional[List[int]] = None
+    origin = payload.get("origin")
+    if origin is not None:
+        try:
+            index = int(origin)
+        except (TypeError, ValueError):
+            index = -1
+        if 0 <= index < grid.node_count:
+            origins = [index]
+    result = grid.simulate(origins)
 
     return {
         "view": "percolation-grid",
-        "size": size,
+        "rows": rows,
+        "cols": cols,
+        "size": rows,                 # 兼容旧前端（方格网时 size 即边长）
         "p": p,
-        "directed": directed,
+        **options,
+        "latticeName": grid.lattice_name,
+        "directionName": grid.direction_name,
+        "injectName": grid.inject_name,
+        "criterionName": grid.criterion_name,
+        "criterionHint": CRITERION_DESCRIPTIONS[grid.criterion],
         "percolates": result.percolates,
+        # 整张网格是否存在纵贯簇（与注水点无关，贯通判据就看这个）
+        "spans": result.spans,
+        "success": result.success,
+        "engulfed": result.engulfed,
         "nodeCount": result.node_count,
         "totalEdges": result.total_edge_count,
         "openEdges": result.open_edge_count,
@@ -110,35 +213,60 @@ def _handle_generate(params: Dict[str, Any]) -> Dict[str, Any]:
         "wetRatio": result.wet_ratio,
         "depth": result.depth,
         "elapsedMs": result.elapsed * 1000.0,
-        "theoreticalPc": THEORETICAL_PC,
-        # 边用 0/1 字符串压缩传输；layers 用于逐层播放渗透动画
-        "h": h_edges,
-        "v": v_edges,
+        # 阈值信息：pcIsEstimate 为真时前端可标注「估计值」，pcApplies 为假时不要画 p_c
+        "theoreticalPc": grid.theoretical_pc,
+        "pcApplies": grid.pc_applies,
+        "pcIsEstimate": grid.pc_is_estimate,
+        "pcLabel": grid.pc_label,
+        # 本次实际使用的注水点（点击网格时会变成点击的那个节点）
+        "origins": result.origins,
+        "sources": result.origins,
+        # 边用 0/1 字符串压缩传输（方格网 h/v，三角网 h/dl/dr）；layers 用于逐层播放
+        **encode_edges(grid),
         "layers": result.layers,
     }
 
 
 def _handle_batch(params: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
-    """执行一小批独立模拟（分块），由前端循环累加得到总的渗流频率。
+    """执行一小批独立模拟（分块），由前端循环累加得到总的成功频率。
 
     ``payload`` 可覆盖 ``trials``（本块次数）、``seed``（本块种子）与 ``p``
-    （曲线扫描时逐点变化），从而让一次统计既能显示进度、又完全可复现。
+    （曲线扫描时逐点变化），以及 ``lattice`` / ``direction`` / ``inject`` /
+    ``criterion`` / ``threshold``，从而让一次统计既能显示进度、又完全可复现。
     """
-    size = int(payload.get("size", params["size"]))
+    rows = _resolve_size(payload.get("rows", params.get("rows")), 40)
+    cols = _resolve_size(payload.get("cols", params.get("cols")), rows)
     p = float(payload.get("p", params["p"]))
-    directed = bool(payload.get("directed", params["directed"]))
     trials = max(1, int(payload.get("trials", params["trials"])))
     seed = _resolve_seed(payload.get("seed", params.get("seed")))
+    merged = dict(params)
+    merged.update({
+        k: payload[k]
+        for k in ("lattice", "direction", "inject", "criterion", "threshold")
+        if k in payload
+    })
+    options = _grid_options(merged)
 
     result = batch_percolation_probability(
-        size=size, p=p, trials=trials, rng=seed, directed=directed
+        rows=rows, cols=cols, p=p, trials=trials, rng=seed, **options
     )
     return {
         "p": p,
-        "size": size,
+        "rows": result.rows,
+        "cols": result.cols,
+        "size": result.rows,
+        "criterion": result.criterion,
+        "criterionName": result.criterion_name,
+        "criterionHint": CRITERION_DESCRIPTIONS[result.criterion],
+        "pcApplies": result.criterion == "span",
+        "threshold": result.threshold,
+        "lattice": result.lattice,
+        "direction": result.direction,
+        "inject": result.inject,
         "trials": result.trials,
         "success": result.success,
         "probability": result.probability,
+        "meanRatio": result.mean_ratio,
         "stderr": result.stderr,
         "elapsedMs": result.elapsed * 1000.0,
     }
@@ -147,10 +275,10 @@ def _handle_batch(params: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, 
 def handle(action: str, params: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     """动作分发入口，由 :class:`~awe_math.spec.ModelSpec` 调用。"""
     if action == "generate":
-        return _handle_generate(params)
+        return _handle_generate(params, payload)
     if action == "batch":
         return _handle_batch(params, payload)
-    raise ValueError(f"渗流模型不支持的动作：{action}")
+    raise ValueError(f"边渗流模型不支持的动作：{action}")
 
 
 # ----------------------------------------------------------------------
@@ -158,13 +286,36 @@ def handle(action: str, params: Dict[str, Any], payload: Dict[str, Any]) -> Dict
 # ----------------------------------------------------------------------
 def _cli(args) -> int:
     """命令行统计模式：单点估计或扫描 P(p) 曲线。"""
-    size = max(2, min(200, int(getattr(args, "size", 40))))
+    rows = max(2, min(400, int(getattr(args, "size", 40))))
+    cols = getattr(args, "cols", None)
+    cols = rows if cols is None else max(2, min(400, int(cols)))
     trials = max(1, int(getattr(args, "trials", 1000)))
-    p = float(getattr(args, "p", 0.5))
-    directed = bool(getattr(args, "directed", False))
-    seed = getattr(args, "seed", -1)
-    rng = None if int(seed) < 0 else int(seed)
-    mode = "有向渗流（只向下/左/右）" if directed else "标准无向渗流"
+    raw_p = getattr(args, "p", None)
+    p = 0.5 if raw_p is None else float(raw_p)
+
+    lattice = getattr(args, "lattice", None)
+    if lattice not in LATTICE_CHOICES.values():
+        lattice = "square"
+    direction = getattr(args, "direction", None)
+    if direction not in DIRECTION_CHOICES.values():
+        # 兼容旧的 --directed 开关
+        direction = "no_up" if getattr(args, "directed", False) else "undirected"
+    inject = getattr(args, "inject", None)
+    if inject not in INJECT_CHOICES.values():
+        inject = "top"
+    criterion = getattr(args, "criterion", None)
+    if criterion not in CRITERIA:
+        criterion = DEFAULT_CRITERION
+    threshold = _resolve_threshold(getattr(args, "threshold", None))
+
+    options = {"lattice": lattice, "direction": direction, "inject": inject,
+               "criterion": criterion, "threshold": threshold}
+    shape = f"{rows}×{cols}" if rows != cols else f"{rows}×{rows}"
+    grid = PercolationGrid(rows=rows, cols=cols, p=p, **options)
+    header = (f"{grid.lattice_name} {shape} | {grid.direction_name} | "
+              f"注水：{grid.inject_name} | 判据：{grid.criterion_name} | {grid.pc_label}")
+    rule = ("贯通判据：整张网格是否存在纵贯簇" if criterion == "span"
+            else f"面积判据：浸润比例 ≥ {threshold:.0%}")
 
     if getattr(args, "scan", False):
         step = float(getattr(args, "step", 0.05))
@@ -174,62 +325,87 @@ def _cli(args) -> int:
             p_values.append(round(k * step, 3))
             k += 1
 
-        print("=" * 70)
-        print(f"渗流概率扫描 | 网格 {size}×{size} | 每点 {trials} 次 | {mode}")
-        print(f"理论临界值 p_c = {THEORETICAL_PC}（二维方格网键渗流）")
-        print("=" * 70)
-        print(f"{'概率 p':>8} | {'渗流概率':>10} | {'成功/次数':>15} | 分布")
-        print("-" * 70)
+        print("=" * 78)
+        print(f"边渗流概率扫描 | {header}")
+        print(f"每点 {trials} 次模拟 | {rule}")
+        print("=" * 78)
+        print(f"{'流通概率 p':>10} | {'成功概率':>12} | {'平均浸润比例':>12} | 分布")
+        print("-" * 78)
 
         from .model import scan_curve
 
         def on_point(done: int, total: int, res) -> None:
-            bar = "█" * int(round(res.probability * 26))
-            print(f"{res.p:>8.2f} | {res.probability:>10.4f} | "
-                  f"{res.success:>6}/{res.trials:<8} | {bar}")
+            bar = "█" * int(round(res.mean_ratio * 26))
+            print(f"{res.p:>10.2f} | {res.probability:>12.4f} | "
+                  f"{res.mean_ratio:>12.4f} | {bar}")
             sys.stdout.flush()
 
-        scan_curve(p_values, size=size, trials=trials, rng=rng,
-                   directed=directed, progress=on_point)
-        print("-" * 70)
-        print("提示：p 越过 p_c 之后渗流概率迅速由 0 跃升到 1，即相变现象。")
+        scan_curve(p_values, rows=rows, cols=cols, trials=trials,
+                   rng=_resolve_seed(getattr(args, "seed", -1)),
+                   progress=on_point, **options)
+        print("-" * 78)
+        if criterion == "span":
+            print("提示：成功概率 = 1/2 的交点即临界值 p_c（p 越过它，水路贯通 —— 相变）。")
+        else:
+            print("提示：面积判据的交点不是固定临界值，它随所设比例、网格尺寸、注水方式变化；")
+            print("      只有「贯通判据」的交点才等于 p_c。")
         return 0
 
-    grid = PercolationGrid(size=size, p=p, rng=rng, directed=directed)
+    seed = _resolve_seed(getattr(args, "seed", -1))
+    grid = PercolationGrid(rows=rows, cols=cols, p=p, rng=seed, **options)
     single = grid.simulate()
-    print("=" * 70)
-    print(f"单次模拟 | 网格 {size}×{size} | p = {p:.2f} | {mode}")
+    print("=" * 78)
+    print(f"单次模拟 | {header}")
     print(f"流通边 {single.open_edge_count}/{single.total_edge_count}"
-          f"（实测比例 {single.open_ratio:.3f}）")
+          f"（实测比例 {single.open_ratio:.3f}）| {rule}")
     print(f"浸润节点 {single.wet_count}/{single.node_count}（{single.wet_ratio:.1%}），"
-          f"渗透 {single.depth} 层")
-    print(f"是否渗流出水：{'是 ✔' if single.percolates else '否 ✘'}")
+          f"蔓延 {single.depth} 层")
+    if criterion == "span":
+        verdict = "存在纵贯簇 ✔" if single.spans else "没有纵贯簇 ✘"
+        print(f"整张网格是否存在纵贯簇（顶行 ↔ 底行）：{verdict}；"
+              f"本次注水{'已到达底端' if single.percolates else '未到达底端'}。")
+    else:
+        verdict = f"达到 ≥{threshold:.0%} ✔" if single.engulfed else f"不足 {threshold:.0%} ✘"
+        print(f"本次浸润比例 {single.wet_ratio:.1%}，{verdict}；"
+              f"本次注水{'已到达底端' if single.percolates else '未到达底端'}。")
 
-    res = batch_percolation_probability(size=size, p=p, trials=trials,
-                                        rng=None if rng is None else rng + 1,
-                                        directed=directed)
-    print("-" * 70)
-    print(f"批量统计 | 独立模拟 {res.trials} 次 | 成功 {res.success} 次")
-    print(f"该 p 值下的渗流概率 ≈ {res.probability:.4f} ± {res.stderr:.4f}"
+    res = batch_percolation_probability(
+        rows=rows, cols=cols, p=p, trials=trials,
+        rng=None if seed is None else seed + 1, **options,
+    )
+    print("-" * 78)
+    print(f"批量统计 | 独立模拟 {res.trials} 次 | {rule} 命中 {res.success} 次")
+    print(f"该 p 值下「{res.criterion_name}」的成功概率 ≈ {res.probability:.4f} "
+          f"± {res.stderr:.4f}，平均浸润比例 {res.mean_ratio:.1%}"
           f"（耗时 {res.elapsed:.2f} s）")
-    print("=" * 70)
+    print("=" * 78)
     return 0
 
 
 def build_spec() -> ModelSpec:
-    """构造并返回渗流模型的元数据。"""
+    """构造并返回边渗流模型的元数据。"""
     return ModelSpec(
         key="percolation",
-        name="方格网渗流",
+        name="边渗流模型",
         topic="量变引起质变",
-        summary="每条边以概率 p 随机连通，看水能否从顶端渗到底端，"
-                "并统计渗流出水概率随 p 变化的相变曲线。",
+        summary="每条边以概率 p 随机连通，看水能否从注水点渗到底端；"
+                "支持方格网/三角网、方形/矩形网格、四种方向模式、三种注水方式与两种成功判据。",
         description=(
-            "在 n×n 的方格网上，每条边以概率 p 独立地设为「流通」或「阻断」，"
-            "水从顶端整行同时注入，沿流通边向各方向蔓延（标准无向渗流）；"
-            "只要有一个底端节点与顶端连通，就认为本次「渗流出水」。\n\n"
-            "二维方格网键渗流的理论临界概率 p_c = 1/2：p 略小于它时几乎不可能贯通，"
-            "略大于它时几乎必然贯通，在 p_c 附近发生相变 —— 这正是「量变引起质变」。"
+            "在 rows × cols 的格子上，每条边以概率 p 独立地设为「流通」或「阻断」，"
+            "水从注水点出发沿流通边蔓延。\n\n"
+            "**先分清两种「成功」的标准，它们的临界值完全不是一回事：**\n\n"
+            "1. 贯通判据（默认）：整张网格上是否存在从顶行连通到底行的**纵贯簇**，"
+            "也就是「顶端整行注水能否流到底端」。方格网（4 邻域）无向键渗流 p_c = 1/2、"
+            "三角网（6 邻域）p_c = 2·sin(π/18) ≈ 0.3473、只允许向下/向右的经典有向渗流"
+            "p_c ≈ 0.6447（文献值），说的都是这个相变，所以它的「成功概率 = 1/2」交点"
+            "落在 p_c 上，且与注水方式无关。\n\n"
+            "2. 面积判据：从注水点出发的浸润面积达到设定比例。它回答的是「一次注水能浸透"
+            "多大范围」，**没有固定的临界值**：比例定得越大交点越高，单点注水还会额外要求"
+            "「起点恰好落在巨簇里」，网格尺寸也会影响它。把这条曲线的交点当成 p_c 是常见误解。\n\n"
+            "另外：p_c 只取决于格子的连接结构与方向模式，与网格是正方形还是矩形、"
+            "以及注水点在顶端整行、中心还是随机位置都无关 —— 后两者只改变有限尺寸下"
+            "曲线的形状与陡峭程度（矩形网格与单点注水的曲线更缓、饱和更慢）。"
+            "这些结论都只在贯通判据下成立。"
         ),
         params=PARAMS,
         actions=ACTIONS,
@@ -238,5 +414,8 @@ def build_spec() -> ModelSpec:
         icon="≋",
         handler=handle,
         cli=_cli,
-        highlights=("标准无向边渗流模型", "并查集判定 + 多源 BFS 分层", "p_c = 0.5 的相变现象"),
+        highlights=("两种成功判据：贯通（对 p_c）与面积（无固定阈值）",
+                    "方格网 0.5 / 三角网 0.3473 / 有向 0.6447",
+                    "矩形网格 + 四种方向模式 + 三种注水方式"),
+        order=10,          # 同主题内先展示边渗流，再展示点渗流
     )

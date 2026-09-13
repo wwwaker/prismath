@@ -74,13 +74,29 @@ def build_parser() -> argparse.ArgumentParser:
                      help="用独立桌面窗口打开（需 pip install pywebview），否则用浏览器")
 
     model = parser.add_argument_group("模型参数（终端模式下使用；网页/桌面界面可在界面里调）")
-    model.add_argument("--p", type=float, default=0.5, help="流通概率 p，默认 0.5")
-    model.add_argument("--size", type=int, default=40, help="网格边长，默认 40")
+    model.add_argument("--p", type=float, default=None,
+                       help="概率参数（边渗流=流通概率，点渗流=占据密度）；省略则用模型默认值")
+    model.add_argument("--size", type=int, default=40, help="行数（方格网时即边长），默认 40")
+    model.add_argument("--cols", type=int, default=None,
+                       help="列数；与行数不同即为矩形网格，省略则与行数相同")
+    model.add_argument("--lattice", choices=("square", "triangular"), default=None,
+                       help="格子类型：square 方格网（4 邻域）/ triangular 三角网（6 邻域）")
+    model.add_argument("--direction", default=None,
+                       choices=("undirected", "no_up", "down_right", "down_left"),
+                       help="方向模式：无向 / 不允许向上 / 只允许向下向右 / 只允许向下向左")
+    model.add_argument("--inject", choices=("top", "center", "random"), default=None,
+                       help="注水（起始）方式：顶端整行 / 中心 / 随机单点；省略则用模型默认值")
+    model.add_argument("--criterion", choices=("span", "area"), default=None,
+                       help="成功判据：span = 存在纵贯簇（对应 p_c，默认）；"
+                            "area = 面积比例达到阈值（无固定临界值）")
+    model.add_argument("--threshold", choices=("0.3", "0.5", "0.7", "0.9"), default=None,
+                       help="（判据 = area 时）面积判据的比例阈值，默认 0.5")
     model.add_argument("--trials", type=int, default=1000, help="统计次数，默认 1000")
-    model.add_argument("--scan", action="store_true", help="扫描 p 从 0 到 1 的渗流概率曲线")
+    model.add_argument("--scan", action="store_true", help="扫描 p 从 0 到 1 的概率曲线")
     model.add_argument("--step", type=float, default=0.05, help="扫描步长，默认 0.05")
     model.add_argument("--seed", type=int, default=-1, help="随机种子，-1 表示随机")
-    model.add_argument("--directed", action="store_true", help="使用有向渗流（水不能向上）")
+    model.add_argument("--directed", action="store_true",
+                       help="（旧选项）等价于 --direction no_up")
     return parser
 
 
@@ -92,11 +108,11 @@ def _print_models() -> List[ModelSpec]:
     print(_rule("═"))
     print(" 可用的数学模型")
     print(_rule("═"))
-    print(f" {'序号':<6}{_pad('标识', 16)}{_pad('名称', 18)}{_pad('主题', 20)}简介")
+    print(f" {'序号':<6}{_pad('标识', 18)}{_pad('名称', 18)}{_pad('主题', 20)}简介")
     print(_rule())
     for index, spec in enumerate(models, start=1):
         print(
-            f" [{index}]  {_pad(spec.key, 16)}{_pad(spec.icon + ' ' + spec.name, 18)}"
+            f" [{index}]  {_pad(spec.key, 18)}{_pad(spec.icon + ' ' + spec.name, 18)}"
             f"{_pad(spec.topic, 20)}{spec.summary[:34]}…"
         )
     print(_rule())

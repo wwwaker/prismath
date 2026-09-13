@@ -97,6 +97,7 @@ class ModelSpec:
     handler: Optional[Callable[[str, Dict[str, Any], Dict[str, Any]], Dict[str, Any]]] = None
     cli: Optional[Callable[[Any], int]] = None   # 终端模式的入口（可省略）
     highlights: Tuple[str, ...] = ()             # 门户卡片上的要点
+    order: int = 100                             # 同主题内的展示顺序（越小越靠前）
 
     def to_dict(self) -> Dict[str, Any]:
         """转成可 JSON 序列化的字典（不含函数，供界面层使用）。"""

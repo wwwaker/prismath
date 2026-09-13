@@ -558,7 +558,8 @@ function rebuildBase() {
   cv.bctx.clearRect(0, 0, g.w, g.h);
   cv.wctx.clearRect(0, 0, g.w, g.h);
 
-  const { n, h: hEdges, v: vEdges } = state.payload;
+  // 三角网没有 v/dl/dr 之外的编码，缺字段时按空串处理（不绘制，但不报错）
+  const { n, h: hEdges = '', v: vEdges = '' } = state.payload;
 
   // ---- 阻断边（虚线，批量成一条路径绘制） ----
   if (state.showBlocked && g.cell > 2.2) {
@@ -743,9 +744,19 @@ async function generate({ animate = true } = {}) {
   if (token !== state.token) return;
   if (!res.ok) { toast(res.error, 'error'); setRunState('出错', '#fb7185'); return; }
 
+  const info = res.result;
+  const unsupported = (info.lattice && info.lattice !== 'square')
+    || (info.cols && info.cols !== info.rows);
+  if (unsupported) {   // 网页渲染器只支持方格网，三角网 / 矩形网格请到桌面端看
+    state.payload = null;
+    toast('三角网 / 矩形网格请在桌面端查看（python main.py --ui tk）：网页渲染器目前只支持方格网。', 'error');
+    $('#gridSub').textContent = '该网格类型请在桌面端查看';
+    setRunState('已跳过绘制', '#fbbf24');
+    return;
+  }
+
   state.payload = res.result;
   state.showNodes = true;
-  const info = res.result;
   if ($('#showNodes') && info.size > 44) { // 超密网格默认隐藏节点，避免糊成一团
     state.showNodes = false;
     $('#showNodes').checked = false;

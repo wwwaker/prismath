@@ -9,7 +9,7 @@
 key       说明                                         依赖
 ========  ==========================================  ==============================
 ``web``   现代网页界面（Canvas 动画 + 玻璃拟态配色）     Python 标准库（可选 pywebview）
-``tk``    经典桌面窗口（Tkinter）                      tkinter（可选 matplotlib）
+``tk``    桌面窗口（Tkinter，顶部下拉框切换模型）        tkinter（可选 matplotlib）
 ``cli``   终端统计模式，适合批量化出数                  无
 ========  ==========================================  ==============================
 
@@ -60,7 +60,7 @@ def _run_web(spec: ModelSpec, args) -> int:
 
 
 def _run_tk(spec: ModelSpec, args) -> int:
-    from .tk.app import launch
+    from .tk.shell import launch
 
     return launch(spec)
 
@@ -81,8 +81,8 @@ UI_BACKENDS: Dict[str, UIBackend] = {
     ),
     "tk": UIBackend(
         key="tk",
-        name="经典桌面窗口",
-        summary="Tkinter 实现的单窗口程序，不需要浏览器，适合离线环境",
+        name="桌面窗口",
+        summary="Tkinter 实现的单窗口程序：顶部下拉框可切换模型，含逐层动画、批量统计与曲线",
         entry=_run_tk,
         requires=("tkinter（Python 自带）", "matplotlib（可选，用于曲线）"),
     ),

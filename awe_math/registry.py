@@ -65,8 +65,8 @@ def find(query: str) -> ModelSpec:
 
 
 def all_models() -> List[ModelSpec]:
-    """返回所有已注册模型（按主题、名称排序，保证门户展示顺序稳定）。"""
-    return sorted(_MODELS.values(), key=lambda s: (s.topic, s.name))
+    """返回所有已注册模型（按主题、order、名称排序，保证门户展示顺序稳定）。"""
+    return sorted(_MODELS.values(), key=lambda s: (s.topic, s.order, s.name))
 
 
 def load_models(force: bool = False) -> List[ModelSpec]:
