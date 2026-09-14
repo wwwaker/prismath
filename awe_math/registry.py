@@ -11,6 +11,23 @@
 
 :func:`load_models` 会自动导入 ``awe_math.models`` 下的所有子包，
 因此新增模型无需修改任何入口代码。
+
+一个模型的完整形态（**界面代码跟着模型走**）
+-------------------------------------------
+::
+
+    awe_math/models/<模型包>/
+        __init__.py        # register(ModelSpec(...))，导入本包即完成注册
+        model.py           # 纯计算内核（只依赖标准库，不要 import 界面）
+        spec.py            # 参数 / 动作 / view="<渲染器名>"
+        cli.py             # 可选：终端模式的入口（spec.cli）
+        views/
+            tk.py          # 可选：桌面视图，@register_view("<spec.view>")
+            web.js/.py     # 可选：网页视图 / 该模型的静态资源
+
+界面代码（``views/`` 下）会引入 tkinter / matplotlib 这类重型依赖，因此**不要在
+``__init__.py`` 里 import 它**——各界面后端会在自己启动时按需导入。这样无头场景
+（网页服务、终端模式）不会被拖进 GUI 依赖。
 """
 
 from __future__ import annotations

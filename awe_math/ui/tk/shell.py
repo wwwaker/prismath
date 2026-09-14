@@ -5,12 +5,16 @@
 
 窗口自上而下分两层：
 
-* **顶部标题栏**：项目名 + 「模型」下拉框（列出注册表里的全部模型，切换即换视图）；
-* **视图区**：由 ``spec.view`` 决定用哪个视图（见 :func:`_view_classes`），
-  没有专用视图的模型自动落到 :class:`FallbackView`（跑动作 + 看 JSON 结果）。
+* **顶部标题栏**：项目名 + 「模型」下拉框（列出注册表里的全部模型，切换即换视图）
+  + 「☰ 模型列表」按钮（回到入口页）；
+* **视图区**：首屏是**模型列表入口页**（:class:`~awe_math.ui.tk.portal.ModelPortal`，
+  点卡片进入某个模型），之后由 ``spec.view`` 决定用哪个视图（见
+  :mod:`awe_math.ui.tk.kit` 的注册表），没有专用视图的模型自动落到
+  :class:`FallbackView`（跑动作 + 看 JSON 结果）。
 
-新增模型时不必改这里：只要在 :func:`_view_classes` 里登记一行 ``view 名 -> 视图类``，
-其余模型自动获得一个可用的兜底界面。
+新增模型时**不必改这里**：在模型自己的包里写 ``views/tk.py``，用
+:func:`~awe_math.ui.tk.kit.register_view` 装饰视图类（并把 ``spec.view`` 取成同一个
+名字）即可被自动发现；没有专用视图的模型自动获得一个可用的兜底界面。
 """
 
 from __future__ import annotations
@@ -35,19 +39,10 @@ from .theme import (
     install_theme,
     polish_comboboxes,
 )
+from .kit import view_for
+from .portal import ModelPortal
 
 __all__ = ["DesktopShell", "FallbackView", "launch"]
-
-
-def _view_classes() -> dict:
-    """桌面视图注册表（延迟导入，避免一次性加载全部视图与 matplotlib）。"""
-    from .app import PercolationApp
-    from .site import SitePercolationApp
-
-    return {
-        "percolation": PercolationApp,          # 边渗流（边随机连通）
-        "site_percolation": SitePercolationApp,  # 点渗流（格子随机占据）
-    }
 
 
 class FallbackView:
@@ -125,7 +120,7 @@ class FallbackView:
 
 
 class DesktopShell:
-    """桌面窗口：顶部模型下拉框 + 中部当前模型的可视化视图。"""
+    """桌面窗口：顶部模型下拉框 + 中部当前模型的视图（首屏是模型列表入口页）。"""
 
     def __init__(self, root: tk.Tk, spec: Optional[ModelSpec] = None) -> None:
         self.root = root
@@ -141,9 +136,11 @@ class DesktopShell:
 
         self._build_chrome()
 
-        target = spec if spec is not None else (self.models[0] if self.models else None)
-        if target is not None:
-            self.show(target)
+        # 指定了模型就直接进它的视图；否则先停在「模型列表」入口页
+        if spec is not None:
+            self.show(spec)
+        elif self.models:
+            self.show_portal()
         else:
             self._show_message("还没有注册任何模型。")
 
@@ -182,6 +179,8 @@ class DesktopShell:
         )
         self.combo.pack(side="left")
         self.combo.bind("<<ComboboxSelected>>", self._on_model_selected)
+        ttk.Button(inner, text="☰ 模型列表", command=self.show_portal).pack(
+            side="left", padx=(10, 0))
         polish_comboboxes(header)     # 让弹出列表也是暗色（否则会露出系统白底）
 
         tk.Frame(header, bg=BORDER, height=1).pack(fill="x")
@@ -198,21 +197,39 @@ class DesktopShell:
     # ==================================================================
     # 视图切换
     # ==================================================================
-    def show(self, spec: ModelSpec) -> None:
-        """切换到指定模型的视图（先释放旧视图，再新建宿主容器）。"""
+    def _reset_host(self) -> tk.Frame:
+        """释放旧视图并换一个新的宿主容器（切模型与回入口页共用），返回新容器。"""
         if self.view is not None:
             self.view.shutdown()
             self.view = None
         if self.host is not None:
             self.host.destroy()
 
-        self.host = tk.Frame(self.root, bg=BG)
-        self.host.grid(row=1, column=0, sticky="nsew")
-        self.host.columnconfigure(0, weight=1)
-        self.host.rowconfigure(0, weight=1)
+        host = tk.Frame(self.root, bg=BG)
+        host.grid(row=1, column=0, sticky="nsew")
+        host.columnconfigure(0, weight=1)
+        host.rowconfigure(0, weight=1)
+        self.host = host
+        return host
 
-        view_cls: Type = _view_classes().get(spec.view, FallbackView)
-        self.view = view_cls(self.root, self.host, spec)
+    def show_portal(self) -> None:
+        """回到「模型列表」入口页：把注册表里的模型排成卡片，点一下进对应视图。"""
+        host = self._reset_host()
+        self.view = ModelPortal(
+            self.root, host, self.models,
+            on_open=self.show, on_quit=self._on_close,
+        )
+        self.model_var.set("")
+        self.combo.set("")
+        self.hint_var.set(getattr(self.view, "HINTS", ""))
+        self.root.title("数学模型可视化工具箱 · 桌面窗口")
+
+    def show(self, spec: ModelSpec) -> None:
+        """切换到指定模型的视图（先释放旧视图，再新建宿主容器）。"""
+        host = self._reset_host()
+
+        view_cls: Type = view_for(spec.view) or FallbackView
+        self.view = view_cls(self.root, host, spec)
 
         self.model_var.set(self._label(spec))
         self.combo.set(self._label(spec))
@@ -244,8 +261,9 @@ class DesktopShell:
 def launch(spec: Optional[ModelSpec] = None, **_kwargs) -> int:
     """启动桌面窗口。
 
-    ``spec`` 由 :mod:`awe_math.launcher` 传入，决定打开时先显示哪个模型；
-    省略时默认显示注册表里的第一个模型。下拉框里始终可以切换到其它模型。
+    ``spec`` 由 :mod:`awe_math.launcher` 传入：给了就直接进那个模型的视图
+    （``--model xxx``）；省略则先显示**模型列表入口页**，由用户挑一个模型进去。
+    进入之后，顶部的下拉框与「☰ 模型列表」按钮都可以随时切换。
     """
     root = tk.Tk()
     install_theme(root)

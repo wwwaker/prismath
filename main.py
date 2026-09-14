@@ -6,14 +6,17 @@ awe_math · 数学模型可视化工具箱 —— 统一入口
 
 用法::
 
-    python main.py                                  # 门户：选择模型 → 选择界面
+    python main.py                                  # 默认：桌面窗口的「模型列表」入口页
+    python main.py --model percolation              # 跳过列表，直接进这个模型的窗口
     python main.py --list                           # 列出全部模型与界面后端
-    python main.py --model percolation --ui web     # 直接进入渗流模型的网页界面
-    python main.py --model percolation --ui tk      # 用桌面窗口打开同一模型
-    python main.py --model percolation --ui cli --scan
+    python main.py --menu                           # 终端交互模式（选模型 → 选界面）
+    python main.py --model percolation --ui cli --scan   # 终端里跑统计 / 扫描曲线
+    python main.py --ui web                         # 网页界面（暂时弃用，需显式指定）
 
 新增数学模型不需要修改本文件：在 ``awe_math/models/`` 下新建一个包，
-在其中调用 :func:`awe_math.registry.register` 注册 ``ModelSpec`` 即可。
+在其中调用 :func:`awe_math.registry.register` 注册 ``ModelSpec`` 即可；
+若要给模型配桌面界面，再在同一个包里加 ``views/tk.py``（见
+:mod:`awe_math.registry` 的模块说明）。
 """
 
 from __future__ import annotations

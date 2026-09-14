@@ -92,7 +92,6 @@ __all__ = [
     "batch_percolation_probability",
     "scan_curve",
     "encode_edges",
-    "lattice_layout",
 ]
 
 #: 方格网键渗流的经典临界值（保留旧名，便于外部引用；对应 ``criterion="span"``）
@@ -994,24 +993,8 @@ class PercolationGrid:
         return self._percolates_bfs(list(origins))
 
 
-def lattice_layout(rows: int, cols: Optional[int] = None,
-                   lattice: str = "square") -> List[Tuple[float, float]]:
-    """返回每个节点在图上的**单位坐标**（供界面层等比缩放后绘制）。
-
-    * 方格网：``x = c``、``y = r``，行距 1；
-    * 三角网：奇数行右移半格、行距 ``√3 / 2``，恰好铺成等边三角形。
-
-    返回列表的下标即节点索引（``row * cols + col``）。
-    """
-    columns = int(cols) if cols is not None else int(rows)
-    row_h = 1.0 if lattice == "square" else math.sqrt(3.0) / 2.0
-    half = 0.0 if lattice == "square" else 0.5
-    pts: List[Tuple[float, float]] = []
-    for r in range(int(rows)):
-        shift = half * (r % 2)
-        for c in range(columns):
-            pts.append((c + shift, r * row_h))
-    return pts
+# 说明：格点在图纸上的单位坐标 ``lattice_layout`` 由两个模型共用，已移到
+# :mod:`awe_math.models._geometry`（本模块保持"只依赖标准库、可单独导入"的性质）。
 
 
 # ----------------------------------------------------------------------

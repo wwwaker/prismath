@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Tuple
+from typing import Optional, Tuple
 
 __all__ = [
     "BG",
@@ -297,9 +297,12 @@ class ScrollArea:
     把卡片 pack 进 :attr:`inner`，构建完成后调用 :meth:`bind_wheel` 绑定滚轮。
     """
 
-    def __init__(self, parent: tk.Misc, width: int = 306, bg: str = BG) -> None:
-        self.outer = tk.Frame(parent, bg=bg, width=width)
-        self.outer.grid_propagate(False)
+    def __init__(self, parent: tk.Misc, width: Optional[int] = 306, bg: str = BG) -> None:
+        """``width=None`` 表示宽度随父容器自适应（整页可滚动内容用得上）。"""
+        self.outer = tk.Frame(parent, bg=bg)
+        if width is not None:
+            self.outer.configure(width=width)
+            self.outer.grid_propagate(False)
         self.canvas = tk.Canvas(self.outer, bg=bg, highlightthickness=0, bd=0, takefocus=0)
         self.scrollbar = ttk.Scrollbar(
             self.outer, orient="vertical", command=self.canvas.yview,

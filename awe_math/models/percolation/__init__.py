@@ -13,6 +13,7 @@
 """
 
 from ...registry import register
+from .._geometry import lattice_layout  # noqa: F401  两个模型共用的格子几何
 from .model import (  # noqa: F401  便于外部直接引用
     CRITERIA,
     CRITERION_NAMES,
@@ -28,7 +29,6 @@ from .model import (  # noqa: F401  便于外部直接引用
     SimResult,
     batch_percolation_probability,
     encode_edges,
-    lattice_layout,
     scan_curve,
 )
 from .spec import build_spec

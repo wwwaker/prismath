@@ -12,7 +12,10 @@
 * ``spec.handler(action, params, payload) -> dict`` 负责计算，返回可 JSON 序列化的结果。
 
 模型的 ``view`` 字段决定前端用哪个渲染器（例如 ``"percolation"`` 会画网格动画，
-未知取值则退化为“参数表单 + JSON 结果”的通用视图）。
+未知取值则退化为“参数表单 + JSON 结果”的通用视图）。渲染器本身按**后端**组织、按
+**模型**落位：共享骨架在 ``awe_math/ui/<后端>/``，某个模型的渲染器写在模型自己的包里
+（``awe_math/models/<模型包>/views/<后端>.py``），由后端按约定懒加载——
+详见 :mod:`awe_math.registry` 的模块说明。
 """
 
 from __future__ import annotations
