@@ -50,8 +50,17 @@ from .common import (
     half_crossing,
     label as choice_label,
 )
+from .criteria import BAD, NO, OK
+from .protocols import ViewContract
 
 __all__ = ["ResultPanelMixin", "HAS_MPL"]
+
+#: 结论徽章的等级 -> (底色, 字色)
+_BADGE_COLORS = {
+    OK: (BADGE_OK_BG, BADGE_OK_FG),
+    NO: (BADGE_NO_BG, BADGE_NO_FG),
+    BAD: (BADGE_BAD_BG, BADGE_BAD_FG),
+}
 
 # ----------------------------------------------------------------------
 # matplotlib 为可选依赖：只有曲线页需要它
@@ -79,7 +88,7 @@ except Exception as _exc:  # pragma: no cover - 环境缺库时降级
     _MPL_ERROR = str(_exc)
 
 
-class ResultPanelMixin:
+class ResultPanelMixin(ViewContract):
     """右侧三标签页结果面板 + 指标刷新 + 曲线绘制。"""
 
     # ==================================================================
@@ -278,7 +287,7 @@ class ResultPanelMixin:
             xs = [r.p for r in self._scan_results]
             prob = [r.probability * 100.0 for r in self._scan_results]
             ratio = [r.mean_ratio * 100.0 for r in self._scan_results]
-            span = self._scan_criterion == "span"
+            strategy = self._criterion_strategy(self._scan_criterion)
             ax.plot(
                 xs, prob, "-o", color=ACCENT, lw=1.8, ms=3.4,
                 mfc=BG_CANVAS, mec=TEXT, mew=0.8,
@@ -288,8 +297,8 @@ class ResultPanelMixin:
                 xs, ratio, "--", color="#7dd3fc", lw=1.5,
                 label=terms.curve_ratio_label,
             )
-            # p_c 只属于贯通判据：面积判据下这条线画出来只会误导
-            pc = self._scan_pc if span else None
+            # p_c 只属于贯通判据：其他判据下这条线画出来只会误导
+            pc = self._scan_pc if strategy.pc_applies else None
             if pc is not None:
                 kind = "估计" if self.model.pc_is_estimate else "阈值"
                 ax.axvline(
@@ -310,11 +319,8 @@ class ResultPanelMixin:
             cols = self._scan_cols or rows
             lattice_name = choice_label(self.LATTICE_CHOICES, self._scan_lattice)
             direction_name = choice_label(self.DIRECTION_CHOICES, self._scan_direction)
-            rule = {
-                "span": "贯通判据",
-                "origin": "起点判据",
-                "area": f"面积判据 ≥ {self._scan_threshold:.0%}",
-            }[self._scan_criterion]
+            rule = (f"{strategy.curve_label} ≥ {self._scan_threshold:.0%}"
+                    if strategy.uses_threshold else strategy.curve_label)
             inject_name = choice_label(self.INJECT_CHOICES, self._scan_inject)
             title = (f"P(p) 曲线（{lattice_name} {rows}×{cols} · {direction_name} · "
                      f"注水 {inject_name} · {rule}，每点 {trials} 次）")
@@ -332,13 +338,9 @@ class ResultPanelMixin:
                     fontsize=8, color=WARN,
                     arrowprops=dict(arrowstyle="->", color=WARN, lw=1),
                 )
-            elif not span:
-                note = ("起点判据：交点高于 p_c —— 还要看注水点是否落在纵贯簇里；"
-                        "注水方式选「顶端整行」时才等于 p_c"
-                        if self._scan_criterion == "origin" else
-                        "面积判据：曲线交点随「比例 / 网格尺寸 / 注水方式」变化，不是 p_c")
+            elif not strategy.pc_applies and strategy.curve_note:
                 ax.text(
-                    0.03, 0.03, note,
+                    0.03, 0.03, strategy.curve_note,
                     transform=ax.transAxes, ha="left", va="bottom",
                     fontsize=7.5, color=WARN,
                 )
@@ -393,47 +395,22 @@ class ResultPanelMixin:
         self.vals["spanning"].set(value)
 
     def _update_badge(self, view: ActiveView, shown: int) -> None:
-        """顶部结论徽章：按判据给出「这一次算不算成功」的一句话。"""
+        """顶部结论徽章：按判据给出「这一次算不算成功」的一句话。
+
+        文案与等级由判据策略给出（见 :mod:`~awe_math.ui.tk.kit.criteria`），
+        工具箱本身不认识任何具体判据。
+        """
         terms = self._terms
-        unit = terms.unit
         if not view.has_source:
             self.badge.configure(
                 text=terms.no_source_badge, bg=BADGE_BAD_BG, fg=BADGE_BAD_FG)
-        elif shown < view.depth:
+            return
+        if shown < view.depth:
             self.badge.configure(text=terms.progress_badge, bg=PANEL_2, fg=WARN)
-        elif view.criterion == "span":
-            # 贯通判据：结论看整片区域有没有纵贯簇，活动面积只是附带信息
-            if view.spans:
-                self.badge.configure(
-                    text=f"✔ 存在纵贯簇（{view.spanning_count} {unit}，"
-                         f"{terms.active_verb} {view.active_ratio:.1%}）",
-                    bg=BADGE_OK_BG, fg=BADGE_OK_FG)
-            else:
-                self.badge.configure(
-                    text=f"✘ 没有纵贯簇（{terms.active_verb} {view.active_ratio:.1%}）",
-                    bg=BADGE_NO_BG, fg=BADGE_NO_FG)
-        elif view.criterion == "origin":
-            # 起点判据：最容易困惑的一档 —— 区域有纵贯簇，但注水点在簇外
-            if view.origin_spans:
-                self.badge.configure(
-                    text=f"✔ 起点纵贯（{terms.active_verb} {view.active_ratio:.1%}）",
-                    bg=BADGE_OK_BG, fg=BADGE_OK_FG)
-            elif view.spans:
-                self.badge.configure(
-                    text=f"✘ 起点在纵贯簇外（簇 {view.spanning_count} {unit}）",
-                    bg=BADGE_NO_BG, fg=BADGE_NO_FG)
-            else:
-                self.badge.configure(
-                    text=f"✘ 起点未纵贯（{terms.active_verb} {view.active_ratio:.1%}）",
-                    bg=BADGE_NO_BG, fg=BADGE_NO_FG)
-        elif view.engulfed:
-            self.badge.configure(
-                text=f"✔ 面积达标 {view.active_ratio:.1%}（≥{view.threshold:.0%}）",
-                bg=BADGE_OK_BG, fg=BADGE_OK_FG)
-        else:
-            self.badge.configure(
-                text=f"✘ 面积不足 {view.active_ratio:.1%}（<{view.threshold:.0%}）",
-                bg=BADGE_NO_BG, fg=BADGE_NO_FG)
+            return
+        text, level = self._criterion_strategy(view.criterion).badge(view, terms)
+        bg, fg = _BADGE_COLORS.get(level, _BADGE_COLORS[NO])
+        self.badge.configure(text=text, bg=bg, fg=fg)
 
     # ------------------------------------------------------------------
     # 交给子类的两处模型差异

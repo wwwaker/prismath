@@ -32,6 +32,7 @@ from .model import (
     SitePercolation,
     batch_spread_probability,
     encode_sites,
+    scan_curve,
 )
 
 # ----------------------------------------------------------------------
@@ -166,18 +167,39 @@ def _options(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def build_grid(params: Dict[str, Any]) -> SitePercolation:
+    """由参数构造模型实例 —— **A/B 两套契约共用的唯一构造入口**。
+
+    数据级契约（:func:`handle`）与对象级契约（桌面视图的 ``spec.factory``）都调用它，
+    于是"界面参数 -> 模型"的换算只写一份。
+
+    ``params`` 里的 ``lattice`` / ``direction`` / ``inject`` / ``criterion`` 必须是模型
+    **内部取值**（界面上的中文标签请先用 :func:`_options` 翻译）；
+    ``rng`` 可以是 ``None`` / 种子 / ``random.Random`` 实例（也接受 ``seed``）。
+    """
+    if "rng" not in params and "seed" in params:
+        params = {**params, "rng": _resolve_seed(params.get("seed"))}
+    return SitePercolation(
+        rows=_resolve_size(params.get("rows"), 30),
+        cols=params.get("cols"),
+        p=float(params.get("p", 0.6)),
+        rng=params.get("rng"),
+        lattice=params.get("lattice", "square"),
+        direction=params.get("direction", "undirected"),
+        inject=params.get("inject", "random"),
+        criterion=params.get("criterion", DEFAULT_CRITERION),
+        threshold=_resolve_threshold(params.get("threshold")),
+    )
+
+
 def _handle_spread(params: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     """蔓延一次：返回前端绘制逐层动画所需的全部数据。
 
     ``payload`` 里可以带上 ``origin``（格子索引），用于「点击格地指定注水点」。
     """
     options = _options(params)
-    p = float(params["p"])
-    model = SitePercolation(
-        p=p, rng=_resolve_seed(params.get("seed")),
-        rows=options.pop("rows"), cols=options.pop("cols"),
-        threshold=options.pop("threshold"), **options,
-    )
+    p = float(params.get("p", 0.6))
+    model = build_grid({**options, "p": p, "rng": _resolve_seed(params.get("seed"))})
 
     origins: Optional[List[int]] = None
     origin = payload.get("origin")
@@ -324,7 +346,7 @@ def _cli(args) -> int:
     options = {"lattice": lattice, "direction": direction, "inject": inject,
                "criterion": criterion}
     shape = f"{rows}×{cols}" if rows != cols else f"{rows}×{rows}"
-    probe = SitePercolation(rows=rows, cols=cols, p=p, **options)
+    probe = build_grid({"rows": rows, "cols": cols, "p": p, **options})
     # 判据名称由下一行的 rule 给出，这里只放临界值说明，避免「判据：… | 判据：…」重复
     header = (f"{probe.lattice_name} {shape} | {probe.direction_name} | "
               f"注水：{probe.inject_name} | {probe.pc_label}")
@@ -350,8 +372,6 @@ def _cli(args) -> int:
         print(f"{'占据密度 p':>10} | {'成功概率':>12} | {'平均蔓延比例':>12} | 分布")
         print("-" * 78)
 
-        from .model import scan_curve
-
         def on_point(done: int, total: int, res) -> None:
             bar = "█" * int(round(res.mean_ratio * 26))
             print(f"{res.p:>10.2f} | {res.probability:>12.4f} | "
@@ -372,9 +392,8 @@ def _cli(args) -> int:
             print("      只有「贯通判据」的交点才等于 p_c。")
         return 0
 
-    model = SitePercolation(rows=rows, cols=cols, p=p,
-                            rng=_resolve_seed(getattr(args, "seed", -1)),
-                            threshold=threshold, **options)
+    model = build_grid({"rows": rows, "cols": cols, "p": p, "threshold": threshold,
+                        "rng": _resolve_seed(getattr(args, "seed", -1)), **options})
     single = model.simulate()
     print("=" * 78)
     print(f"单次蔓延 | {header}")
@@ -457,6 +476,11 @@ def build_spec() -> ModelSpec:
         icon="▦",
         handler=handle,
         cli=_cli,
+        # 对象级契约：桌面视图直接渲染、后台批量统计 / 曲线扫描都复用它，
+        # 于是「界面参数 -> 模型」与「批量/扫描函数」不必在视图里再写一遍
+        factory=build_grid,
+        batch=batch_spread_probability,
+        scan=scan_curve,
         highlights=("三种成功判据：贯通（对 p_c）/ 起点纵贯（随注水方式）/ 面积比例",
                     "方格网 p_c ≈ 0.5927 / 三角网 0.5",
                     "矩形格地 + 四种方向模式 + 三种注水方式"),

@@ -6,10 +6,24 @@
 任何数学模型只需要提供一份 :class:`ModelSpec`，界面层就能自动生成控件：
 参数（滑块 / 开关 / 下拉框）、动作按钮、结果视图。
 
-模型与界面之间的约定只有两条：
+模型与界面之间的两套契约（都写在同一个 ``ModelSpec`` 里，共用同一份 ``model.py``）
+-------------------------------------------------------------------------------
+
+**数据级契约**（所有后端都用，尤其是网页 / 通用视图 / 终端）：
 
 * ``spec.params`` 描述可调参数，界面据此生成表单；
 * ``spec.handler(action, params, payload) -> dict`` 负责计算，返回可 JSON 序列化的结果。
+
+**对象级契约**（桌面后端画布 / 动画需要模型对象时用，可选）：
+
+* ``spec.factory(params) -> model``：由（**内部取值**的）参数构造模型实例；
+* ``spec.batch`` / ``spec.scan``：批量统计 / 曲线扫描函数（签名见
+  :class:`~awe_math.ui.tk.kit.protocols.BatchRunner`）。
+
+桌面骨架 :class:`~awe_math.ui.tk.kit.base.PercolationViewBase` 默认就用这三项来驱动模型
+（``_create_model`` 走 ``factory``、``_model_functions`` 走 ``batch``/``scan``），
+于是**同一份"参数 -> 模型"的胶水只写一处**，不会再在 ``handler`` 与 ``views/tk.py`` 里
+各写一遍。两者当然都只调用 ``model.py`` 里的纯计算，所以逻辑本身也不会分叉。
 
 模型的 ``view`` 字段决定前端用哪个渲染器（例如 ``"percolation"`` 会画网格动画，
 未知取值则退化为“参数表单 + JSON 结果”的通用视图）。渲染器本身按**后端**组织、按
@@ -99,6 +113,13 @@ class ModelSpec:
     icon: str = "◆"
     handler: Optional[Callable[[str, Dict[str, Any], Dict[str, Any]], Dict[str, Any]]] = None
     cli: Optional[Callable[[Any], int]] = None   # 终端模式的入口（可省略）
+    # ---- 对象级契约（可选）：桌面后端要对象 / 后台任务时用，见模块说明 ----
+    #: 由（模型内部取值的）参数构造模型实例；桌面视图渲染需要模型对象时用它
+    factory: Optional[Callable[[Dict[str, Any]], Any]] = None
+    #: 批量统计函数（签名见 ``ui/tk/kit/protocols.BatchRunner``）
+    batch: Optional[Callable[..., Any]] = None
+    #: 曲线扫描函数（签名见 ``ui/tk/kit/protocols.ScanRunner``）
+    scan: Optional[Callable[..., Any]] = None
     highlights: Tuple[str, ...] = ()             # 门户卡片上的要点
     order: int = 100                             # 同主题内的展示顺序（越小越靠前）
 

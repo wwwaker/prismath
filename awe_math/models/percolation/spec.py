@@ -32,6 +32,7 @@ from .model import (
     PercolationGrid,
     batch_percolation_probability,
     encode_edges,
+    scan_curve,
 )
 
 # ----------------------------------------------------------------------
@@ -165,6 +166,31 @@ def _grid_options(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def build_grid(params: Dict[str, Any]) -> PercolationGrid:
+    """由参数构造模型实例 —— **A/B 两套契约共用的唯一构造入口**。
+
+    数据级契约（:func:`handle`）与对象级契约（桌面视图的 ``spec.factory``）都调用它，
+    于是"界面参数 -> 模型"的换算只写一份。
+
+    ``params`` 里的 ``lattice`` / ``direction`` / ``inject`` / ``criterion`` 必须是模型
+    **内部取值**（界面上的中文标签请先用 :func:`_grid_options` 翻译）；
+    ``rng`` 可以是 ``None`` / 种子 / ``random.Random`` 实例（也接受 ``seed``）。
+    """
+    if "rng" not in params and "seed" in params:
+        params = {**params, "rng": _resolve_seed(params.get("seed"))}
+    return PercolationGrid(
+        rows=_resolve_size(params.get("rows"), 30),
+        cols=params.get("cols"),
+        p=float(params.get("p", 0.5)),
+        rng=params.get("rng"),
+        lattice=params.get("lattice", "square"),
+        direction=params.get("direction", "undirected"),
+        inject=params.get("inject", "top"),
+        criterion=params.get("criterion", DEFAULT_CRITERION),
+        threshold=_resolve_threshold(params.get("threshold")),
+    )
+
+
 def _handle_generate(params: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     """生成一次网格并完成渗流模拟，返回前端绘图所需的全部数据。
 
@@ -172,12 +198,11 @@ def _handle_generate(params: Dict[str, Any], payload: Dict[str, Any]) -> Dict[st
     """
     rows = _resolve_size(params.get("rows"), 30)
     cols = _resolve_size(params.get("cols"), rows)
-    p = float(params["p"])
+    p = float(params.get("p", 0.5))
     options = _grid_options(params)
 
-    grid = PercolationGrid(
-        rows=rows, cols=cols, p=p, rng=_resolve_seed(params.get("seed")), **options
-    )
+    grid = build_grid({"rows": rows, "cols": cols, "p": p,
+                       "rng": _resolve_seed(params.get("seed")), **options})
 
     origins: Optional[List[int]] = None
     origin = payload.get("origin")
@@ -319,7 +344,7 @@ def _cli(args) -> int:
     options = {"lattice": lattice, "direction": direction, "inject": inject,
                "criterion": criterion, "threshold": threshold}
     shape = f"{rows}×{cols}" if rows != cols else f"{rows}×{rows}"
-    grid = PercolationGrid(rows=rows, cols=cols, p=p, **options)
+    grid = build_grid({"rows": rows, "cols": cols, "p": p, **options})
     # 判据名称由下一行的 rule 给出，这里只放临界值说明，避免「判据：… | 判据：…」重复
     header = (f"{grid.lattice_name} {shape} | {grid.direction_name} | "
               f"注水：{grid.inject_name} | {grid.pc_label}")
@@ -345,8 +370,6 @@ def _cli(args) -> int:
         print(f"{'流通概率 p':>10} | {'成功概率':>12} | {'平均浸润比例':>12} | 分布")
         print("-" * 78)
 
-        from .model import scan_curve
-
         def on_point(done: int, total: int, res) -> None:
             bar = "█" * int(round(res.mean_ratio * 26))
             print(f"{res.p:>10.2f} | {res.probability:>12.4f} | "
@@ -368,7 +391,7 @@ def _cli(args) -> int:
         return 0
 
     seed = _resolve_seed(getattr(args, "seed", -1))
-    grid = PercolationGrid(rows=rows, cols=cols, p=p, rng=seed, **options)
+    grid = build_grid({"rows": rows, "cols": cols, "p": p, "rng": seed, **options})
     single = grid.simulate()
     print("=" * 78)
     print(f"单次模拟 | {header}")
@@ -442,6 +465,11 @@ def build_spec() -> ModelSpec:
         icon="≋",
         handler=handle,
         cli=_cli,
+        # 对象级契约：桌面视图直接渲染、后台批量统计 / 曲线扫描都复用它，
+        # 于是「界面参数 -> 模型」与「批量/扫描函数」不必在视图里再写一遍
+        factory=build_grid,
+        batch=batch_percolation_probability,
+        scan=scan_curve,
         highlights=("三种成功判据：贯通（对 p_c）/ 起点纵贯（随注水方式）/ 面积比例",
                     "方格网 0.5 / 三角网 0.3473 / 有向 0.6447",
                     "矩形网格 + 四种方向模式 + 三种注水方式"),

@@ -19,7 +19,6 @@
 
 from __future__ import annotations
 
-import json
 import tkinter as tk
 from tkinter import ttk
 from typing import List, Optional, Type
@@ -34,89 +33,25 @@ from .theme import (
     FAINT,
     FONT_SM,
     FONT_TITLE,
-    PANEL_2,
-    TEXT,
     install_theme,
     polish_comboboxes,
 )
-from .kit import view_for
+from .kit import ModelViewBase, view_for
 from .portal import ModelPortal
 
 __all__ = ["DesktopShell", "FallbackView", "launch"]
 
 
-class FallbackView:
-    """通用兜底视图：没有专用渲染器的模型也能在桌面里跑动作、看 JSON 结果。"""
+class FallbackView(ModelViewBase):
+    """通用兜底视图：继承通用骨架 :class:`~awe_math.ui.tk.kit.base.ModelViewBase`。
 
-    HINTS = "该模型暂无专用桌面视图，可在下方运行动作查看结果"
+    没有专用渲染器的模型也能在桌面里跑动作、看结果：参数表单由 ``spec.params`` 自动生成，
+    按钮由 ``spec.actions`` 生成，结果以 JSON 显示。想给某个模型定制界面时，写一份
+    ``views/tk.py`` 继承 :class:`ModelViewBase`（或渗流子类 ``PercolationViewBase``）即可。
+    """
 
-    def __init__(self, root: tk.Tk, host: tk.Misc, spec: ModelSpec) -> None:
-        self.root = root
-        self.host = host
-        self.spec = spec
-        self.actions = tuple(getattr(spec, "actions", ()))
-        self._build()
-
-    def _build(self) -> None:
-        self.host.columnconfigure(0, weight=1)
-        self.host.rowconfigure(1, weight=1)
-
-        head = ttk.Frame(self.host, style="Panel.TFrame", padding=16)
-        head.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 0))
-        ttk.Label(head, text=self.spec.name, style="Card.TLabel", font=FONT_TITLE).pack(anchor="w")
-        ttk.Label(
-            head, text=self.spec.summary, style="CardDim.TLabel",
-            wraplength=980, justify="left",
-        ).pack(anchor="w", pady=(6, 0))
-        if self.spec.description:
-            ttk.Label(
-                head, text=self.spec.description, style="CardDim.TLabel",
-                wraplength=980, justify="left", font=FONT_SM,
-            ).pack(anchor="w", pady=(8, 0))
-
-        body = ttk.Frame(self.host, style="Panel.TFrame", padding=16)
-        body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(8, 12))
-        body.columnconfigure(0, weight=1)
-        body.rowconfigure(1, weight=1)
-
-        bar = ttk.Frame(body, style="Card.TFrame")
-        bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        for action in self.actions:
-            ttk.Button(
-                bar, text=action.label,
-                command=lambda key=action.key: self.run_action(key),
-            ).pack(side="left", padx=(0, 8))
-        if not self.actions:
-            ttk.Label(bar, text="该模型没有声明可执行动作。",
-                      style="CardDim.TLabel").pack(side="left")
-
-        self.output = tk.Text(
-            body, bg=PANEL_2, fg=TEXT, insertbackground=TEXT, relief="flat",
-            wrap="none", padx=10, pady=8, height=18,
-        )
-        self.output.grid(row=1, column=0, sticky="nsew")
-        self._write("点击上方按钮，用默认参数运行动作；结果以 JSON 显示。")
-
-    def _write(self, text: str) -> None:
-        self.output.configure(state="normal")
-        self.output.delete("1.0", "end")
-        self.output.insert("1.0", text)
-        self.output.configure(state="disabled")
-
-    def run_action(self, key: str) -> None:
-        """用参数默认值运行一次动作，把结果（或错误）显示在下方。"""
-        try:
-            result = self.spec.run(key, {})
-        except Exception as exc:      # 把模型异常直接展示出来，方便排查
-            self._write(f"× 运行失败：{type(exc).__name__}: {exc}")
-            return
-        self._write(json.dumps(result, ensure_ascii=False, indent=2))
-
-    def on_key(self, key: str) -> None:
-        """兜底视图不响应快捷键。"""
-
-    def shutdown(self) -> None:
-        """兜底视图没有后台任务，无需释放资源。"""
+    HINTS = "该模型暂无专用桌面视图，可用左侧参数与动作运行"
+    INTRO_STATUS = "就绪：可调参数、运行动作，结果以 JSON 显示。"
 
 
 class DesktopShell:

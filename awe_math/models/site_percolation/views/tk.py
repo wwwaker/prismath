@@ -43,12 +43,7 @@ from awe_math.ui.tk.kit import (  # 桌面界面工具箱（共享骨架，与�
 from awe_math.ui.tk.theme import DIM, FAINT, lerp_color
 
 from ..._options import SITE_INJECT_CHOICES
-from ..model import (
-    SitePercolation,
-    SpreadResult,
-    batch_spread_probability,
-    scan_curve,
-)
+from ..model import SpreadResult
 
 # ----------------------------------------------------------------------
 # 画布配色
@@ -198,14 +193,9 @@ class SitePercolationApp(PercolationViewBase):
     FOOTER_COLOR = FAINT
 
     # ==================================================================
-    # 模型适配
+    # 模型适配（构造与批量 / 扫描都由 spec 的 factory / batch / scan 提供，
+    # 这里只需把模型结果归一化成界面统一使用的 ActiveView）
     # ==================================================================
-    def _create_model(self, **kwargs) -> SitePercolation:
-        return SitePercolation(**kwargs)
-
-    def _model_functions(self):
-        return batch_spread_probability, scan_curve
-
     def _active_view(self) -> ActiveView:
         """把 :class:`SpreadResult` 归一化成界面统一使用的 :class:`ActiveView`。"""
         res = cast(SpreadResult, self.result)

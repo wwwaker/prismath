@@ -5,51 +5,33 @@
 
 批量统计 / 曲线扫描都耗时较长（数千次模拟），因此一律放到**后台线程**执行：
 
-* 计算线程只把消息丢进 :class:`queue.Queue`（``("progress", ...)`` 等），绝不碰 Tk 控件；
-* 主线程用 ``root.after`` 定时轮询队列，在这里刷新进度条、状态栏与结果面板；
-* 「停止」按钮置位 :class:`threading.Event`，后台线程在每轮迭代检查它；
-* 视图被切换 / 关闭时（:meth:`JobsMixin.shutdown`）取消挂起的轮询并置位取消标志，
-  避免回调继续访问已销毁的控件。
+* 计算线程只把消息丢进 ``self._queue``（``("progress", ...)`` 等），绝不碰 Tk 控件；
+* 主线程由基类 :meth:`~awe_math.ui.tk.kit.base.ModelViewBase._poll_queue` 定时轮询队列；
+* 「停止」按钮置位 ``self._cancel``（:class:`threading.Event`），后台线程在每轮迭代检查它；
+* 视图被切换 / 关闭时（:meth:`JobsMixin.shutdown`）取消挂起的动画并交给基类统一收尾。
 
-本 mixin 只依赖基类提供的「参数与状态」，不关心模型是边渗流还是点渗流；具体调用哪个
-模型函数由子类的 :meth:`~awe_math.ui.tk.views.base.PercolationViewBase._model_functions`
-提供。
+线程与队列这些**通用机制**由 :class:`~awe_math.ui.tk.kit.base.ModelViewBase` 提供
+（``_submit`` / ``_poll_queue`` / ``_set_busy`` / ``stop_work`` / ``shutdown``），本 mixin 只负责
+"批量统计 / 曲线扫描"这两件渗流特有的事：调用子类 :meth:`_model_functions` 给出的模型函数，
+并把回传结果刷进结果面板。
 """
 
 from __future__ import annotations
 
-import queue
-import threading
-from typing import Any, Dict, Sequence, Tuple
+from typing import Any, Dict
 
-from tkinter import messagebox
-
-from ..theme import DIM, FAINT, WARN
-from .common import TREE_OK, TREE_NO, parse_float, parse_int
+from .common import parse_float, parse_int
+from .protocols import ViewContract
 
 __all__ = ["JobsMixin"]
 
 
-class JobsMixin:
-    """后台任务（线程 + 队列 + 进度 + 取消）。"""
+class JobsMixin(ViewContract):
+    """后台任务（批量统计 + 曲线扫描）。"""
 
-    # ==================================================================
-    # 忙碌态与取消
-    # ==================================================================
-    def _set_busy(self, busy: bool, text: str = "") -> None:
-        """切换忙碌态：执行中的按钮禁用、停止按钮启用。"""
-        self._busy = busy
-        for btn in self._action_buttons:
-            btn.configure(state="disabled" if busy else "normal")
-        self.btn_stop.configure(state="normal" if busy else "disabled")
-        if text:
-            self.var_status.set(text)
-
-    def stop_work(self) -> None:
-        """请求停止后台批量统计 / 扫描（后台线程在每轮迭代检查取消标志）。"""
-        self._cancel.set()
-        self.var_status.set("正在停止…")
-
+    # ------------------------------------------------------------------
+    # 批量统计与曲线扫描共用的模型选项
+    # ------------------------------------------------------------------
     def _batch_options(self) -> Dict[str, Any]:
         """批量统计与曲线扫描共用的模型选项（不含 p / 形状 / 次数）。"""
         model = self.model
@@ -99,7 +81,7 @@ class JobsMixin:
             except Exception as exc:  # pragma: no cover - 后台线程里的异常统一回传
                 self._queue.put(("error", f"批量统计失败：{exc}"))
 
-        threading.Thread(target=job, daemon=True).start()
+        self._submit(job)
 
     def start_scan(self) -> None:
         """扫描 p ∈ [0, 1]，绘制当前判据下的成功概率与平均活动比例曲线。"""
@@ -147,24 +129,12 @@ class JobsMixin:
             except Exception as exc:  # pragma: no cover - 后台线程里的异常统一回传
                 self._queue.put(("error", f"{self._terms.scan_error}：{exc}"))
 
-        threading.Thread(target=job, daemon=True).start()
+        self._submit(job)
 
     # ==================================================================
-    # 主线程轮询与消息处理
+    # 消息处理（在基类的轮询里被调用）
     # ==================================================================
-    def _poll_queue(self) -> None:
-        """主线程定时取出后台线程的消息（视图关闭后自动停止）。"""
-        if not self._alive:
-            return
-        try:
-            while True:
-                kind, payload = self._queue.get_nowait()
-                self._handle_message(kind, payload)
-        except queue.Empty:
-            pass
-        self.root.after(70, self._poll_queue)
-
-    def _handle_message(self, kind: str, payload) -> None:
+    def _handle_message(self, kind: str, payload: Any) -> None:
         if kind == "progress":
             done, total = payload
             self.progress.configure(maximum=total, value=done)
@@ -189,10 +159,8 @@ class JobsMixin:
                 f"每点 {self._scan_meta[1]} 次{self._terms.curve_trial_word}。"
             )
 
-        elif kind == "error":
-            self._set_busy(False)
-            messagebox.showerror("出错了", str(payload))
-            self.var_status.set(str(payload))
+        else:                       # error 等通用消息交回基类
+            super()._handle_message(kind, payload)
 
     def _on_batch_done(self, res) -> None:
         """批量统计完成：刷新指标 / 历史表，并按判据给出「这个概率意味着什么」。"""
@@ -216,32 +184,14 @@ class JobsMixin:
         )
 
     def _batch_tail(self, res) -> str:
-        """批量统计结论的补充说明（按判据解释「成功概率」是什么）。"""
-        if res.criterion == "span":
-            pc = self.model.theoretical_pc
-            return (f"贯通判据下，成功概率 ≈ 1/2 的位置就是{self._terms.pc_word} p_c"
-                    + (f" = {pc:.4f}。" if pc is not None else "（该组合暂无已知值）。"))
-        if res.criterion == "origin":
-            return ("起点判据下，1/2 交点高于 p_c —— 它还额外要求"
-                    "「注水点落在纵贯簇里」；注水方式选「顶端整行」时才等于 p_c。")
-        return ("面积判据下这个概率随所设比例变化，其 1/2 交点不是 p_c"
-                "（想量 p_c 请把判据切到「贯通判据」）。")
+        """批量统计结论的补充说明（文案由判据策略给出）。"""
+        return self._criterion_strategy(res.criterion).batch_tail(
+            res, self.model, self._terms)
 
     # ==================================================================
     # 生命周期
     # ==================================================================
     def shutdown(self) -> None:
-        """视图被关闭（或切换到别的模型）时释放资源并停止后台任务。"""
-        self._alive = False
+        """视图被关闭（或切换到别的模型）时先停动画，再交给基类统一释放。"""
         self._cancel_animation()
-        for job in (self._regenerate_job, self._redraw_job, self._poll_job, self._first_job):
-            if job is not None:
-                try:
-                    self.root.after_cancel(job)
-                except tk.TclError:
-                    pass
-        self._regenerate_job = None
-        self._redraw_job = None
-        self._poll_job = None
-        self._first_job = None
-        self._cancel.set()          # 通知后台线程停止
+        super().shutdown()

@@ -20,11 +20,12 @@ from typing import Tuple
 
 from ..theme import FAINT, FONT_SM, ScrollArea
 from .common import MAX_SIZE, THRESHOLD_CHOICES
+from .protocols import ViewContract
 
 __all__ = ["SidebarMixin"]
 
 
-class SidebarMixin:
+class SidebarMixin(ViewContract):
     """左侧控制栏（卡片族）。"""
 
     # ------------------------------------------------------------------
@@ -69,8 +70,9 @@ class SidebarMixin:
         )
         self.lbl_p.pack(side="right")
 
+        p_low, p_high = self.spec_bounds("p", 0.0, 1.0)
         self.scale_p = ttk.Scale(
-            card, from_=0.0, to=1.0, variable=self.var_p,
+            card, from_=p_low, to=p_high, variable=self.var_p,
             command=self._on_p_change,
         )
         self.scale_p.pack(fill="x", pady=(4, 8))
@@ -78,8 +80,9 @@ class SidebarMixin:
         rows_row = ttk.Frame(card, style="Card.TFrame")
         rows_row.pack(fill="x", pady=(0, 6))
         ttk.Label(rows_row, text="行数 n", style="Card.TLabel").pack(side="left")
+        rows_low, rows_high = self.spec_bounds("rows", 5, MAX_SIZE)
         spin_rows = ttk.Spinbox(
-            rows_row, from_=5, to=MAX_SIZE, width=5,
+            rows_row, from_=rows_low, to=rows_high, width=5,
             textvariable=self.var_rows, command=self._on_shape_change,
         )
         spin_rows.pack(side="right")
@@ -91,8 +94,9 @@ class SidebarMixin:
         ttk.Label(cols_row, text="列数 m", style="Card.TLabel").pack(side="left")
         ttk.Label(cols_row, text="≠ 行数 即矩形", style="CardDim.TLabel",
                   font=FONT_SM).pack(side="left", padx=(6, 0))
+        cols_low, cols_high = self.spec_bounds("cols", 5, MAX_SIZE)
         spin_cols = ttk.Spinbox(
-            cols_row, from_=5, to=MAX_SIZE, width=5,
+            cols_row, from_=cols_low, to=cols_high, width=5,
             textvariable=self.var_cols, command=self._on_shape_change,
         )
         spin_cols.pack(side="right")
@@ -106,8 +110,8 @@ class SidebarMixin:
         )
         self.lbl_threshold.pack(side="left")
         threshold = ttk.Combobox(
-            thr_row, width=5, state="readonly",
-            textvariable=self.var_threshold, values=THRESHOLD_CHOICES,
+            thr_row, width=5, state="readonly", textvariable=self.var_threshold,
+            values=self.spec_choices("threshold", THRESHOLD_CHOICES),
         )
         threshold.pack(side="right")
         threshold.bind("<<ComboboxSelected>>", lambda _e: self.regenerate())
@@ -115,8 +119,9 @@ class SidebarMixin:
         seed_row = ttk.Frame(card, style="Card.TFrame")
         seed_row.pack(fill="x", pady=(0, 6))
         ttk.Label(seed_row, text="统计种子（-1 = 随机）", style="Card.TLabel").pack(side="left")
+        seed_low, seed_high = self.spec_bounds("seed", -1, 2147483647)
         ttk.Spinbox(
-            seed_row, from_=-1, to=2147483647, width=11, textvariable=self.var_seed,
+            seed_row, from_=seed_low, to=seed_high, width=11, textvariable=self.var_seed,
         ).pack(side="right")
 
         speed_row = ttk.Frame(card, style="Card.TFrame")
@@ -194,7 +199,7 @@ class SidebarMixin:
         ttk.Label(row, text="实验次数 N", style="Card.TLabel").pack(side="left")
         ttk.Combobox(
             row, width=8, textvariable=self.var_trials,
-            values=("100", "500", "1000", "5000", "10000"),
+            values=self.spec_choices("trials", ("100", "500", "1000", "5000", "10000")),
         ).pack(side="right")
 
         self.btn_batch = ttk.Button(
@@ -208,8 +213,15 @@ class SidebarMixin:
         row1 = ttk.Frame(card, style="Card.TFrame")
         row1.pack(fill="x", pady=(0, 6))
         ttk.Label(row1, text="曲线每点次数", style="Card.TLabel").pack(side="left")
+        # 每点次数的候选来自 spec（choice 型参数），值域取其最小 / 最大
+        scan_choices = self.spec_choices("scanTrials", ())
+        if scan_choices:
+            scan_nums = sorted(int(float(c)) for c in scan_choices)
+            trial_low, trial_high = scan_nums[0], scan_nums[-1]
+        else:
+            trial_low, trial_high = 20, 5000
         ttk.Spinbox(
-            row1, from_=20, to=5000, increment=20, width=7,
+            row1, from_=trial_low, to=trial_high, increment=20, width=7,
             textvariable=self.var_scan_trials,
         ).pack(side="right")
 
@@ -218,7 +230,7 @@ class SidebarMixin:
         ttk.Label(row2, text="p 扫描步进", style="Card.TLabel").pack(side="left")
         ttk.Combobox(
             row2, width=6, textvariable=self.var_scan_step,
-            values=("0.02", "0.05", "0.1"),
+            values=self.spec_choices("scanStep", ("0.02", "0.05", "0.1")),
         ).pack(side="right")
 
         self.btn_scan = ttk.Button(card, text="▶ 绘制曲线", command=self.start_scan)

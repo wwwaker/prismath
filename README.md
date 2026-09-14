@@ -44,11 +44,19 @@ python main.py
 
 | 标识 | 名称 | 主题 | 关键数字 |
 | --- | --- | --- | --- |
+| `buffon_needle` | π 蒲丰投针模型 | 概率与统计 | L ≤ d 时命中概率 = 2L/(πd)，故 π ≈ 2LN/(dH) |
 | `percolation` | ≋ 边渗流模型 | 量变引起质变 | 方格网 p_c = 0.5、三角网 ≈ 0.3473、有向 ≈ 0.6447 |
 | `site_percolation` | ▦ 点渗流模型 | 量变引起质变 | 方格网 p_c ≈ 0.5927、三角网 0.5 |
 
-两个模型都支持：方形 / 矩形区域、方格网 / 三角网、四种方向模式（无向、不允许向上、
-只允许向下向右、只允许向下向左）、三种注水方式，以及三种成功判据 + 批量统计 + 曲线扫描。
+两个**渗流类**模型（边渗流 / 点渗流）都支持：方形 / 矩形区域、方格网 / 三角网、四种方向
+模式（无向、不允许向上、只允许向下向右、只允许向下向左）、三种注水方式，以及三种成功判据
++ 批量统计 + 曲线扫描。
+
+`buffon_needle` 是**非渗流**模型（随机投针估计 π）：它走通用桌面骨架，参数表单由
+`spec.params` 自动生成，动作是「投针一次」与「多组重复估计」。**「投针一次」带动态投针
+效果**：针从零开始逐根出现（左侧「动画间隔」可调速；空格重播、`R` 重投、另有「直接显示
+全部」），右侧的命中率与 π 估计随针数实时刷新。它同时是"接入一个不同范式的模型"的参考
+实现（见下文「新增一个模型」）。
 
 ### 三种「成功判据」不是一回事（本项目最容易误解的地方）
 
@@ -60,6 +68,10 @@ python main.py
 
 界面上凡随判据变化的东西（统计行标题、结论徽章、曲线纵轴、p_c 参考线、历史表列名）都会
 跟着改，所以「p_c」只在贯通判据下才有定义。
+
+这些语义全部收在 `ui/tk/kit/criteria.py` 的**判据策略对象**（`Criterion`）里：工具箱不再
+到处写 `if criterion == "span" ...`，而是按策略取文案与判定结果。模型要加自己的判据，只需
+往 `PercolationViewBase.CRITERIA` 里加一条策略，不必改工具箱。
 
 ---
 
@@ -84,11 +96,16 @@ awe_math/
 ├── models/                      各数学模型（每个包自带自己的界面）
 │   ├── _options.py              模型间共用的选项词表
 │   ├── _geometry.py             模型间共用的格子几何
+│   ├── buffon_needle/           蒲丰投针（非渗流：通用骨架 + Monte Carlo）
+│   │   ├── __init__.py          register(spec)：导入本包即完成注册
+│   │   ├── model.py             纯计算内核（投针几何 + π 估计）
+│   │   ├── spec.py              参数 / 动作 / view="buffon_needle"
+│   │   └── views/tk.py          桌面视图（继承 ModelViewBase，@register_view 登记）
 │   ├── percolation/             边渗流
 │   │   ├── __init__.py          register(spec)：导入本包即完成注册
 │   │   ├── model.py             纯计算内核（并查集 + BFS 分层）
 │   │   ├── spec.py              参数 / 动作 / view="percolation"
-│   │   └── views/tk.py          桌面视图（@register_view 登记）
+│   │   └── views/tk.py          桌面视图（继承 PercolationViewBase）
 │   └── site_percolation/        点渗流（结构同上）
 └── ui/                          界面后端
     ├── __init__.py              后端注册表（tk / cli / web）
@@ -97,12 +114,15 @@ awe_math/
     │   ├── shell.py             窗口外壳：模型下拉框 + 「☰ 模型列表」+ 视图切换
     │   ├── portal.py            模型列表入口页
     │   ├── theme.py             深色扁平主题（配色 / 字体 / ttk 样式）
-    │   └── kit/                 桌面界面工具箱：与模型无关的共享骨架
-    │       ├── base.py          视图基类：装配 + 参数判据状态机 + 钩子契约
+    │   └── kit/                 桌面界面工具箱：通用骨架 + 渗流特化骨架
+    │       ├── base.py          ModelViewBase（通用）+ PercolationViewBase（渗流）
+    │       ├── protocols.py     模型契约与视图属性契约（Protocol / ViewContract）
+    │       ├── form.py          按 spec.params 自动生成参数表单
+    │       ├── criteria.py      成功判据策略（徽章 / 结论 / 曲线文案，模型可扩展）
     │       ├── canvas.py        画布、逐层动画、图例、结论
-    │       ├── controls.py      左侧参数栏（卡片族）
+    │       ├── controls.py      左侧参数栏（渗流卡片族，值域/候选项取自 spec）
     │       ├── results.py       右侧三个标签页 + P(p) 曲线
-    │       ├── jobs.py          后台任务（线程 / 队列 / 进度 / 停止）
+    │       ├── jobs.py          后台任务（批量统计 / 曲线扫描）
     │       ├── common.py        术语表、结果归一化、共享配色与工具
     │       └── __init__.py      视图注册表（按约定自动发现）
     └── web/                     网页界面（暂时弃用，代码保留）
@@ -121,53 +141,71 @@ awe_math/
 
 ## 新增一个模型
 
-以「蒲丰投针」为例，只加一个目录（不改任何已有文件）：
+**参考实现**：`awe_math/models/buffon_needle/` 就是一个真实的例子（**非渗流**模型）。
+照抄它的结构即可 —— 只加一个目录，不改任何已有文件：
 
 ```
-awe_math/models/buffon_needle/
+awe_math/models/<模型包>/
     __init__.py     # register(build_spec())
-    model.py        # 投针几何 + Monte Carlo 估计（纯计算）
-    spec.py         # 参数（针长 / 线距 / 投针次数）、动作、view="buffon_needle"
-    cli.py          # 可选：--ui cli 下的入口（spec.cli）
+    model.py        # 投针几何 + Monte Carlo 估计（纯计算，只 import 标准库）
+    spec.py         # 参数（针长 / 线距 / 投针根数 / 重复组数）、动作、view="buffon_needle"
     views/
-        tk.py       # 可选：桌面视图
+        tk.py       # 可选：桌面视图，@register_view("<spec.view>")
 ```
 
-**第一步**：`spec.py` 里给一个 `view` 名（就是渲染器标识）：
+**第一步**：`spec.py` 里给一个 `view` 名（就是渲染器标识），并实现 `handler`：
 
 ```python
 ModelSpec(
-    key="buffon_needle", name="蒲丰投针", topic="概率与统计",
+    key="buffon_needle", name="蒲丰投针模型", topic="概率与统计",
     summary="随机投针估计 π", view="buffon_needle",
-    params=(...), actions=(...), handler=handle,
+    params=PARAMS, actions=ACTIONS, handler=handle, cli=_cli,
+    # 可选（非渗流模型用不到）：桌面后端要直接驱动模型对象时用
+    factory=build_grid, batch=batch_fn, scan=scan_fn,
 )
 ```
 
-**第二步（可选）**：想要专属桌面界面，就在同一个包里写 `views/tk.py`，继承工具箱基类并用
-装饰器登记**同名** view：
+**第二步（可选）**：想要专属桌面界面，就在同一个包里写 `views/tk.py`，用装饰器登记
+**同名** view。**非渗流模型继承通用骨架** `ModelViewBase`：
 
 ```python
-from awe_math.ui.tk.kit import PercolationViewBase, Terms, register_view
+from awe_math.ui.tk.kit import ModelViewBase, register_view
 
 @register_view("buffon_needle")
-class BuffonView(PercolationViewBase):
-    TERMS = Terms(arena="桌面", unit="针", active_verb="命中", ...)
-    STAT_ROWS = (("投针次数", "p"), ("估计 π", "size"), ...)
+class BuffonNeedleView(ModelViewBase):
+    RESULT_ROWS = (("投针根数 N", "n"), ("π 估计值", "pi"), ...)
 
-    def _create_model(self, **kwargs): return BuffonNeedle(**kwargs)
-    def _active_view(self): ...
-    def _draw_base(self): ...
+    def _setup_state(self): ...             # 造模型 / 状态变量
+    def _build_center(self): ...            # 画布（平行线 + 每根针）
+    def _build_right(self): ...             # 右侧结果面板
+    def _render_result(self, payload): ...  # 把动作返回的字典画出来
 ```
 
-**第三步**：`python main.py` —— 入口页会自动出现这张卡片；终端里 `python main.py --list`
-也能立刻看到它。没有 `views/tk.py` 的模型同样能用，会落到「跑动作 + 看 JSON 结果」的
-通用视图，不会因为"没写界面"而报错。
+左侧参数栏（按 `spec.params` 的 `kind` 生成滑块 / 数字框 / 复选框 / 下拉框）与动作按钮
+（按 `spec.actions` 生成）由基类自动完成，不必手写。
 
-> **关于第二步的适用性**：桌面视图基类 `PercolationViewBase` 目前是围绕「概率 p + 格子 +
-> 判据 + 逐层蔓延」这一类模型设计的（钩子清单见 `base.py` 顶部与 `kit/` 各 mixin）。
-> 非渗流模型如果不贴合，可以：① 先不写 `views/tk.py`，用通用视图；② 或者直接用 `kit` 里的
-> 画布 / 面板 / 后台任务 mixin 拼一个更贴合的基类。接入第一个非渗流模型，正是把基类抽象
-> 改准的最佳时机。
+**第三步**：`python main.py` —— 入口页会自动出现这张卡片；终端里 `python main.py --list`
+也能立刻看到它。没有 `views/tk.py` 的模型同样能用，会落到通用兜底视图 `FallbackView`
+（同样由 `spec` 驱动：参数表单 + 动作按钮 + JSON 结果），不会因为"没写界面"而报错。
+
+新增模型后**不需要登记任何中心清单**：`registry.load_models` 会扫描 `models/` 下的每个子包
+（`_` 开头的除外），`kit.discover_views` 会尝试导入每个包的 `views/tk.py`。
+
+**两套契约，一份换算**：`spec.handler(action, params)` 是**数据级**入口（网页 / 通用视图 /
+终端用它），`spec.factory(params)` + `spec.batch` + `spec.scan` 是**对象级**入口（桌面视图
+直接拿模型对象画图、跑后台批量统计与曲线扫描）。桌面骨架默认就用后者，所以「界面参数 →
+模型」的换算（例如 `percolation/spec.py` 的 `build_grid`）只写一份，不会在 `handler` 与
+`views/tk.py` 里各写一遍；非渗流模型（如 `buffon_needle`）只写 `handler` 就够了。
+
+> **该继承哪个基类？** 桌面视图层分两层：
+>
+> * **非渗流模型**继承通用骨架 `ModelViewBase`（`ui/tk/kit/base.py`）—— 参数表单与动作按钮
+>   自动生成，自己只补画布与结果面板（`buffon_needle` 就是这种）；
+> * **渗流类模型**继承渗流特化骨架 `PercolationViewBase` —— 它在通用骨架之上补上
+>   「概率 p + 格子 + 判据 + 逐层蔓延」，只需给一份术语表、一份指标行与几个画布钩子
+>   （`percolation` / `site_percolation` 就是这种）。
+>
+> 模型必须满足的接口写在 `ui/tk/kit/protocols.py`（`PercolationModel` 等），照契约实现即可。
 
 ---
 
@@ -190,9 +228,14 @@ class BuffonView(PercolationViewBase):
 | 模型怎么注册、一个模型包含哪些文件 | `awe_math/registry.py` |
 | 参数 / 动作 / 视图的元数据规范 | `awe_math/spec.py` |
 | 入口流程与无图形环境的降级策略 | `awe_math/launcher.py` |
-| 桌面视图的骨架与需要子类实现的钩子 | `awe_math/ui/tk/kit/base.py` |
+| 桌面视图的通用骨架（不认识模型） | `awe_math/ui/tk/kit/base.py` 的 `ModelViewBase` |
+| 桌面视图对模型的要求（可执行契约） | `awe_math/ui/tk/kit/protocols.py` |
+| 参数表单怎么由 spec.params 生成 | `awe_math/ui/tk/kit/form.py` |
+| 判据的全部界面语义（徽章 / 结论 / 曲线标注） | `awe_math/ui/tk/kit/criteria.py` |
+| 数据级 / 对象级两套契约的字段说明 | `awe_math/spec.py`（模块说明） |
 | 视图怎么被自动发现（约定优于中心清单） | `awe_math/ui/tk/kit/__init__.py` |
-| 一个真实模型的完整视图实现 | `awe_math/models/percolation/views/tk.py` |
+| 一个真实渗流模型的完整视图实现 | `awe_math/models/percolation/views/tk.py` |
+| 一个真实**非渗流**模型的完整实现（通用骨架 + 纯 Monte Carlo） | `awe_math/models/buffon_needle/` |
 
 ---
 
@@ -200,10 +243,13 @@ class BuffonView(PercolationViewBase):
 
 * **网页后端暂时弃用**：代码保留在 `ui/web/`，把 `awe_math/ui/__init__.py` 里 `web` 的
   `deprecated` 改回 `False` 即可恢复为可选后端；
-* 桌面视图基类目前只被两个渗流类模型用过：接入非渗流模型（例如蒲丰投针）时，若发现
-  `_active_view` / `_draw_base` 这类钩子不够通用，正是把抽象改准的时机。
+* 桌面视图层已拆成「通用骨架 `ModelViewBase` + 渗流特化 `PercolationViewBase`」两层，并已由
+  `buffon_needle`（非渗流）与两个渗流模型共同验证；新增模型按范式选基类即可。
+* 网页端只为 `view == "percolation"` 写了专用渲染器（`ui/web/static/app.js`），所以
+  `site_percolation` / `buffon_needle` 在 `--ui web` 下会退化成「参数表单 + 动作按钮 +
+  JSON 结果」的通用视图（web 已弃用，未投入维护）。
 * `ui/tk/kit/` 里的画布 / 面板 / 后台任务是按 mixin 拆的，它们依赖「由基类最终提供」的
-  属性（`self.model`、`self.var_status`、`self._terms` 等）。运行完全正常，但**静态检查器
-  单独分析某个 mixin 时会报一堆 "Cannot access attribute"**——这是 mixin 的固有代价。
-  如果需要消掉这些提示，可以加一份 `TYPE_CHECKING` 下的属性契约（把所有共享属性声明一遍，
-  让各 mixin 继承它）；顺带也能把「基类必须提供什么」写成可执行的文档。
+  属性与相互调用的方法（`self.model`、`self.var_status`、`self._terms`、
+  `self._active_view()` 等）。这些共享属性与方法已集中声明在 `kit/protocols.py` 的
+  `ViewContract` 里（`TYPE_CHECKING` 下），各 mixin 与基类都继承它，因此单独分析某个 mixin
+  也不会再报 "Cannot access attribute"；它同时也是「基类必须提供什么」的可执行文档。

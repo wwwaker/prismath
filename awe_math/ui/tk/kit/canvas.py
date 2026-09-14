@@ -27,11 +27,12 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from ....models._geometry import lattice_layout      # 两个模型共用的格子几何
 from ..theme import BORDER, DIM, FONT_BOLD, FONT_SM, PANEL
 from .common import BG_CANVAS, COL_VERDICT_NO, COL_VERDICT_OK, ActiveView
+from .protocols import ViewContract
 
 __all__ = ["CanvasMixin"]
 
 
-class CanvasMixin:
+class CanvasMixin(ViewContract):
     """中央画布 + 动画 + 图例 + 结论。"""
 
     #: 图例里圆点的描边色（子类覆盖：边渗流用节点描边、点渗流用格子描边）
@@ -156,35 +157,12 @@ class CanvasMixin:
             self._show_verdict()
 
     def _show_verdict(self) -> None:
-        """画布底部显示结论（按当前判据给出不同的说法）。"""
+        """画布底部显示结论（文案由判据策略给出）。"""
         if self.result is None:
             return
         terms = self._terms
         view = self._active_view()
-        ratio = view.active_ratio
-        if view.criterion == "span":
-            ok = view.spans
-            text = (f"✔ {terms.arena}存在纵贯簇（顶行 ↔ 底行）"
-                    if ok else f"✘ {terms.arena}没有纵贯簇")
-            text += f"；{terms.active_phrase} {ratio:.1%}"
-        elif view.criterion == "origin":
-            ok = view.origin_spans
-            if ok:
-                text = (f"✔ 起点纵贯：{terms.origin_cluster_phrase}碰到顶行与底行"
-                        f"（{terms.active_verb} {ratio:.1%}）")
-            elif view.spans:
-                text = (f"✘ 起点未纵贯：{terms.arena}有纵贯簇"
-                        f"（{view.spanning_count} {terms.unit}，青色），"
-                        f"但注水点不在簇内（{terms.active_verb} {ratio:.1%}）")
-            else:
-                text = (f"✘ 起点未纵贯，{terms.arena}也没有纵贯簇"
-                        f"（{terms.active_verb} {ratio:.1%}）")
-        else:
-            ok = view.engulfed
-            text = (f"✔ 面积判据达标：{terms.active_verb} {ratio:.1%}"
-                    f"（≥{view.threshold:.0%}）" if ok else
-                    f"✘ 面积未达标：{terms.active_verb} {ratio:.1%}"
-                    f"（<{view.threshold:.0%}）")
+        text, ok = self._criterion_strategy(view.criterion).verdict(view, terms)
         self.canvas.delete("verdict")
         self.canvas.create_text(
             self.canvas.winfo_width() // 2, self.canvas.winfo_height() - 8,

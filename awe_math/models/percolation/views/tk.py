@@ -46,12 +46,7 @@ from awe_math.ui.tk.kit import (  # 桌面界面工具箱（共享骨架，与�
 from awe_math.ui.tk.theme import ACCENT, lerp_color
 
 from ..._options import BOND_INJECT_CHOICES
-from ..model import (
-    PercolationGrid,
-    SimResult,
-    batch_percolation_probability,
-    scan_curve,
-)
+from ..model import SimResult
 
 # ----------------------------------------------------------------------
 # 画布配色
@@ -182,14 +177,9 @@ class PercolationApp(PercolationViewBase):
     FOOTER_COLOR = COL_BOTTOM
 
     # ==================================================================
-    # 模型适配
+    # 模型适配（构造与批量 / 扫描都由 spec 的 factory / batch / scan 提供，
+    # 这里只需把模型结果归一化成界面统一使用的 ActiveView）
     # ==================================================================
-    def _create_model(self, **kwargs) -> PercolationGrid:
-        return PercolationGrid(**kwargs)
-
-    def _model_functions(self):
-        return batch_percolation_probability, scan_curve
-
     def _active_view(self) -> ActiveView:
         """把 :class:`SimResult` 归一化成界面统一使用的 :class:`ActiveView`。"""
         res = cast(SimResult, self.result)

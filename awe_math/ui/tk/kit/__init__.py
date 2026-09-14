@@ -34,7 +34,7 @@ import importlib
 import pkgutil
 from typing import Callable, Dict, List, Optional, Type
 
-from .base import PercolationViewBase
+from .base import ModelViewBase, PercolationViewBase
 from .canvas import CanvasMixin
 from .common import (  # noqa: F401  供模型视图直接取用
     BADGE_BAD_BG,
@@ -56,7 +56,17 @@ from .common import (  # noqa: F401  供模型视图直接取用
     Terms,
 )
 from .controls import SidebarMixin
+from .criteria import DEFAULT_CRITERIA, Criterion
+from .form import ParamFormMixin, iter_param_groups
 from .jobs import JobsMixin
+from .protocols import (
+    BatchResultLike,
+    BatchRunner,
+    PercolationModel,
+    ScanRunner,
+    SimResultLike,
+    ViewContract,
+)
 from .results import ResultPanelMixin
 
 __all__ = [
@@ -66,11 +76,24 @@ __all__ = [
     "registered_views",
     "discover_views",
     # 骨架
+    "ModelViewBase",
     "PercolationViewBase",
     "CanvasMixin",
     "SidebarMixin",
     "ResultPanelMixin",
     "JobsMixin",
+    "ParamFormMixin",
+    "iter_param_groups",
+    # 契约
+    "PercolationModel",
+    "SimResultLike",
+    "BatchResultLike",
+    "BatchRunner",
+    "ScanRunner",
+    "ViewContract",
+    # 判据策略
+    "Criterion",
+    "DEFAULT_CRITERIA",
     # 公共件
     "Terms",
     "ActiveView",
