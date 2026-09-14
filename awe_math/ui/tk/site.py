@@ -28,7 +28,7 @@ import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 try:  # 作为包的一部分导入
     from ...models.percolation.model import lattice_layout   # 共用的格子几何
@@ -43,7 +43,7 @@ try:  # 作为包的一部分导入
     from ...models.site_percolation.spec import (
         DIRECTION_CHOICES,
         LATTICE_CHOICES,
-        SITE_CRITERION_CHOICES,
+        CRITERION_CHOICES,
         SITE_INJECT_CHOICES,
     )
     from .theme import (
@@ -82,7 +82,7 @@ except ImportError:  # 允许直接运行本文件（把项目根目录加入 im
     from awe_math.models.site_percolation.spec import (  # type: ignore
         DIRECTION_CHOICES,
         LATTICE_CHOICES,
-        SITE_CRITERION_CHOICES,
+        CRITERION_CHOICES,
         SITE_INJECT_CHOICES,
     )
     from awe_math.ui.tk.theme import (  # type: ignore
@@ -119,6 +119,8 @@ COL_GROUND = "#1b2430"      # 相邻格子的连线（可蔓延关系）
 COL_EMPTY = "#222b38"       # 空位
 COL_SITE = "#5c6b80"        # 被占据但还没蔓延到的格子
 COL_SITE_EDGE = "#0a0e13"   # 占据格描边
+COL_SPAN_FILL = "#12433c"   # 纵贯簇（顶行 ↔ 底行连通的簇）的填充
+COL_SPAN_EDGE = "#2dd4bf"   # 纵贯簇描边
 COL_SEED = "#fbbf24"        # 注水点（起始格）
 COL_SPREAD_EDGE = "#a78bfa"  # 蔓延路径
 
@@ -149,7 +151,7 @@ def _ramp_color(t: float) -> str:
     return lerp_color(SPREAD_RAMP[-1][1], SPREAD_RAMP[-1][1], 0.0)
 
 
-def _spec_defaults(spec) -> Dict[str, object]:
+def _spec_defaults(spec) -> Dict[str, Any]:
     """从模型元数据里取出参数默认值（没有 spec 时用点渗流模型的默认值）。"""
     if spec is None:
         return {"p": 0.6, "rows": 30, "cols": 30}
@@ -169,6 +171,19 @@ def _label(mapping: Dict[str, str], value: str) -> str:
     return next(iter(mapping))
 
 
+def _half_crossing(points: Sequence[Tuple[float, float]]) -> Optional[float]:
+    """线性插值求曲线与 50% 的交点（扫描范围内跨不过 50% 时返回 None）。
+
+    这个交点是**有限尺寸 + 网格长宽比**一起决定的结果，和理论 p_c（无限大格子、
+    只由格子与方向决定）不是一回事：长宽比一变，它就跟着移动
+    （例如方格网无向：20×20 约 0.50、20×60 约 0.45、60×20 约 0.54）。
+    """
+    for (p1, v1), (p2, v2) in zip(points, points[1:]):
+        if v1 != v2 and (v1 - 0.5) * (v2 - 0.5) <= 0:
+            return p1 + (p2 - p1) * (0.5 - v1) / (v2 - v1)
+    return None
+
+
 class SitePercolationApp:
     """点渗流模型的可视化视图（由 :class:`DesktopShell` 放入窗口中部）。"""
 
@@ -185,7 +200,7 @@ class SitePercolationApp:
         init_lattice = _pick(LATTICE_CHOICES, defaults.get("lattice"), "square")
         init_direction = _pick(DIRECTION_CHOICES, defaults.get("direction"), "undirected")
         init_inject = _pick(SITE_INJECT_CHOICES, defaults.get("inject"), "random")
-        init_criterion = _pick(SITE_CRITERION_CHOICES, defaults.get("criterion"), "span")
+        init_criterion = _pick(CRITERION_CHOICES, defaults.get("criterion"), "span")
         init_threshold = float(defaults.get("threshold", DEFAULT_THRESHOLD) or DEFAULT_THRESHOLD)
 
         # ---------------- 模型与状态 ----------------
@@ -230,6 +245,7 @@ class SitePercolationApp:
         self.var_cols = tk.IntVar(value=init_cols)
         self.var_speed = tk.IntVar(value=35)
         self.var_threshold = tk.StringVar(value=f"{init_threshold:g}")
+        self.var_seed = tk.StringVar(value=str(defaults.get("seed", -1)))
         self.var_trials = tk.StringVar(value=str(defaults.get("trials", "1000")))
         self.var_scan_trials = tk.StringVar(value=str(defaults.get("scanTrials", "200")))
         self.var_scan_step = tk.StringVar(value=str(defaults.get("scanStep", "0.05")))
@@ -237,7 +253,7 @@ class SitePercolationApp:
         self.var_direction = tk.StringVar(value=_label(DIRECTION_CHOICES, init_direction))
         self.var_inject = tk.StringVar(value=_label(SITE_INJECT_CHOICES, init_inject))
         self.var_criterion = tk.StringVar(
-            value=_label(SITE_CRITERION_CHOICES, init_criterion)
+            value=_label(CRITERION_CHOICES, init_criterion)
         )
         self.var_status = tk.StringVar(
             value="就绪：拖动滑块调整占据密度 p，程序会自动重新生成格地并蔓延。"
@@ -252,6 +268,7 @@ class SitePercolationApp:
             "seeds": tk.StringVar(value="-"),
             "area": tk.StringVar(value="-"),
             "ratio": tk.StringVar(value="-"),
+            "spanning": tk.StringVar(value="-"),
             "depth": tk.StringVar(value="-"),
             "cost": tk.StringVar(value="-"),
             "b_p": tk.StringVar(value="-"),
@@ -381,6 +398,13 @@ class SitePercolationApp:
         threshold.pack(side="right")
         threshold.bind("<<ComboboxSelected>>", lambda _e: self.regenerate_sites())
 
+        seed_row = ttk.Frame(card, style="Card.TFrame")
+        seed_row.pack(fill="x", pady=(0, 6))
+        ttk.Label(seed_row, text="统计种子（-1 = 随机）", style="Card.TLabel").pack(side="left")
+        ttk.Spinbox(
+            seed_row, from_=-1, to=2147483647, width=11, textvariable=self.var_seed,
+        ).pack(side="right")
+
         speed_row = ttk.Frame(card, style="Card.TFrame")
         speed_row.pack(fill="x")
         ttk.Label(speed_row, text="动画间隔", style="Card.TLabel").pack(side="left")
@@ -401,7 +425,7 @@ class SitePercolationApp:
 
         # 判据放最前面：它决定「什么算成功」，也就决定 p_c 是否有意义
         self._option_row(card, "成功判据", self.var_criterion,
-                         tuple(SITE_CRITERION_CHOICES), self._on_criterion_change)
+                         tuple(CRITERION_CHOICES), self._on_criterion_change)
         self._option_row(card, "格子类型", self.var_lattice,
                          tuple(LATTICE_CHOICES), self._on_lattice_change)
         self._option_row(card, "方向模式", self.var_direction,
@@ -424,20 +448,21 @@ class SitePercolationApp:
         )
 
     def _current_criterion(self) -> str:
-        return _pick(SITE_CRITERION_CHOICES, self.var_criterion.get(), "span")
+        return _pick(CRITERION_CHOICES, self.var_criterion.get(), "span")
 
     def _refresh_criterion_texts(self) -> None:
         """判据变化后，刷新那些「随判据改变含义」的界面文案。"""
-        span = self.model.criterion == "span"
-        head = "存在纵贯簇" if span else "面积达标"
+        criterion = self.model.criterion
+        head = {"span": "存在纵贯簇", "origin": "起点纵贯", "area": "面积达标"}[criterion]
+        short = {"span": "贯通", "origin": "起点", "area": "面积"}[criterion]
         self._set_stat_label("b_success", f"{head}次数")
         self._set_stat_label("b_prob", f"{head}概率")
         self.lbl_threshold.configure(
-            text="面积判据阈值" if not span else "面积判据阈值（贯通判据下不生效）",
-            foreground=DIM if not span else FAINT,
+            text="面积判据阈值" if criterion == "area" else "面积判据阈值（面积判据下才生效）",
+            foreground=DIM if criterion == "area" else FAINT,
         )
         try:
-            self.tree.heading("success", text="贯通" if span else "面积")
+            self.tree.heading("success", text=short)
         except tk.TclError:      # 视图销毁过程中可能已被回收
             pass
 
@@ -485,6 +510,10 @@ class SitePercolationApp:
             message = (f"注水方式：{self.model.inject_name}。"
                        "贯通判据只看整片格地有没有纵贯簇，与注水位置无关 —— "
                        "它只影响单次动画的起点。")
+        elif self.model.criterion == "origin":
+            message = (f"注水方式：{self.model.inject_name}。"
+                       "起点判据下注水位置影响很大 —— 顶端整行一定在纵贯簇上，"
+                       "随机/中心单点则可能落在簇外（火很小却仍可能判定成功）。")
         else:
             message = (f"注水方式：{self.model.inject_name}。"
                        "面积判据下起始位置影响很大：单点注水额外要求「起点落在巨簇里」，"
@@ -504,9 +533,15 @@ class SitePercolationApp:
         self.regenerate_sites()
         if criterion == "span":
             self.var_status.set(
-                "已切换为「贯通判据」：判定格地上是否存在顶行↔底行的纵贯簇。"
-                "它的成功概率 = 1/2 交点就是临界密度 p_c（方格网无向 ≈ 0.5927），"
-                "且与注水方式无关。"
+                "已切换为「贯通判据」：判定**整片格地**上是否存在顶行↔底行的纵贯簇"
+                "（青色格子）。它的成功概率 = 1/2 交点就是临界密度 p_c"
+                "（方格网无向 ≈ 0.5927），且与注水方式无关。"
+            )
+        elif criterion == "origin":
+            self.var_status.set(
+                "已切换为「起点判据」：判定**从注水点出发的那一簇**是否纵贯（碰到顶行"
+                "与底行）。它与贯通判据的差别是「还要求注水点落在纵贯簇里」，"
+                "所以交点高于 p_c —— 随机起火常常烧在簇外。"
             )
         else:
             self.var_status.set(
@@ -602,6 +637,7 @@ class SitePercolationApp:
         items = [
             ("dot", COL_SITE, "占据格"),
             ("dot", COL_EMPTY, "空位"),
+            ("dot", COL_SPAN_FILL, "纵贯簇"),
             ("dot", _ramp_color(0.5), "已蔓延"),
             ("dot", COL_SEED, "注水点"),
             ("line", COL_GROUND, "相邻可蔓延"),
@@ -659,6 +695,7 @@ class SitePercolationApp:
             ("注水点", "seeds"),
             ("蔓延格数", "area"),
             ("蔓延比例", "ratio"),
+            ("纵贯簇", "spanning"),
             ("蔓延层数", "depth"),
             ("判定耗时", "cost"),
         ]
@@ -677,17 +714,16 @@ class SitePercolationApp:
             font=FONT_SM,
             text=(
                 "说明：\n"
-                "· 每格以概率 p 独立地被占据，只有相邻的占据格之间才连通；\n"
-                "· 蔓延范围 = 包含注水点的那个连通簇，这就是「随机一棵树起火，\n"
-                "  火只沿相邻的树蔓延，最终烧掉多大面积」；\n"
-                "· 两种「成功」判据必须分清：\n"
-                "  · 贯通判据 = 格地上存在顶行↔底行的纵贯簇 —— p_c 说的就是这个\n"
-                "    相变（方格网无向 ≈ 0.5927、三角网 0.5），与注水方式无关；\n"
+                "· 每格以概率 p 被占据，相邻占据格之间才连通；蔓延范围 = 包含注水点\n"
+                "  的那个连通簇（「随机一棵树起火，火只沿相邻的树烧」）；\n"
+                "· 青色格子是**纵贯簇**：同时连通顶行与底行的那个簇。三种判据：\n"
+                "  · 贯通判据 = 格地上有没有纵贯簇 —— p_c 说的就是这个相变\n"
+                "    （方格网 ≈ 0.5927、三角网 0.5），与注水方式无关；\n"
+                "  · 起点判据 = 你这次注水的那一簇是否纵贯 —— 随机/中心起火经常\n"
+                "    落在纵贯簇之外，所以交点高于 p_c（顶端整行注水时两者相同）；\n"
                 "  · 面积判据 = 蔓延面积达到设定比例 —— 没有固定临界值，交点随\n"
-                "    比例、网格尺寸、注水方式一起漂移（比例越大交点越高）；\n"
-                "· 临界密度只取决于「格子 + 方向」；矩形长宽比与注水位置不改变它，\n"
-                "  只改变有限尺寸下的曲线形状；\n"
-                "· 点击画布上的占据格，可以把水（火）从那里开始蔓延。"
+                "    比例、网格尺寸、注水方式一起漂移；\n"
+                "· 只有贯通判据的 1/2 交点等于 p_c；点击占据格可指定注水点。"
             ),
         ).grid(row=sep_row + 1, column=0, columnspan=2, sticky="w")
 
@@ -799,6 +835,18 @@ class SitePercolationApp:
         except (TypeError, ValueError):
             value = DEFAULT_THRESHOLD
         return min(1.0, max(0.05, value))
+
+    def _current_seed(self) -> Optional[int]:
+        """统计用的随机种子：≥0 时批量统计/曲线完全可复现，-1 表示随机。
+
+        固定种子后，「同一片格地上换判据 / 换注水方式」的横向比较才是严格可比的
+        （否则只能看到蒙特卡洛噪声，例如贯通判据本应与注水方式无关）。
+        """
+        try:
+            value = int(float(self.var_seed.get()))
+        except (TypeError, ValueError):
+            return None
+        return None if value < 0 else value
 
     @staticmethod
     def _parse_int(text: str, default: int, low: int = 1, high: int = 10_000_000) -> int:
@@ -957,11 +1005,16 @@ class SitePercolationApp:
         # 占据格与空位
         occupied = model.occupied
         cols = model.cols
+        # 纵贯簇单独上色：判据问的就是「有没有这么一片格子纵贯顶底」，
+        # 不画出来的话，「判定贯通 + 蔓延面积很小」会显得莫名其妙
+        spanning = set(model.spanning_nodes())
         for idx, (x, y) in enumerate(xy):
-            if occupied[idx // cols][idx % cols]:
-                outline, ow, fill = COL_SITE_EDGE, 1, COL_SITE
-            else:
+            if not occupied[idx // cols][idx % cols]:
                 outline, ow, fill = "", 0, COL_EMPTY
+            elif idx in spanning:
+                outline, ow, fill = COL_SPAN_EDGE, 1, COL_SPAN_FILL
+            else:
+                outline, ow, fill = COL_SITE_EDGE, 1, COL_SITE
             self._node_items[idx] = cv.create_oval(
                 x - radius, y - radius, x + radius, y + radius,
                 fill=fill, outline=outline, width=ow,
@@ -1015,7 +1068,10 @@ class SitePercolationApp:
             item = node_items[idx]
             if item is not None:
                 cv.itemconfigure(item, fill=color, outline=COL_SITE_EDGE, width=1)
-            for nb in model.neighbors(idx):
+            # 找已经蔓延到的邻居给这条边染色。必须用 traversable_neighbors 而不是
+            # neighbors：后者只给「出边」，有向模式下从后来蔓延到的格子看前一个格子是
+            # 「逆方向」的，那条边就漏色了（三角网 + 方向限制时最明显）。
+            for nb in model.traversable_neighbors(idx):
                 if nb not in self._spread_set:
                     continue
                 it = edges.get((idx, nb) if idx < nb else (nb, idx))
@@ -1079,6 +1135,17 @@ class SitePercolationApp:
             text = ("✔ 格地存在纵贯簇（顶行 ↔ 底行）" if ok
                     else "✘ 格地没有纵贯簇")
             text += f"；本次蔓延 {res.spread_ratio:.1%}"
+        elif res.criterion == "origin":
+            ok = res.origin_spans
+            if ok:
+                text = (f"✔ 起点纵贯：注水点的簇碰到顶行与底行"
+                        f"（蔓延 {res.spread_ratio:.1%}）")
+            elif res.spans:
+                text = (f"✘ 起点未纵贯：格地有纵贯簇（{res.spanning_count} 格，青色），"
+                        f"但注水点不在簇内（蔓延 {res.spread_ratio:.1%}）")
+            else:
+                text = (f"✘ 起点未纵贯，格地也没有纵贯簇"
+                        f"（蔓延 {res.spread_ratio:.1%}）")
         else:
             ok = res.engulfed
             text = (f"✔ 面积判据达标：蔓延 {res.spread_ratio:.1%}（≥{res.threshold:.0%}）"
@@ -1168,6 +1235,12 @@ class SitePercolationApp:
         """把一次蔓延的结果说成一句话（随判据变化）。"""
         if res.criterion == "span":
             return "格地存在纵贯簇" if res.spans else "格地没有纵贯簇"
+        if res.criterion == "origin":
+            if res.origin_spans:
+                return "起点纵贯（注水点的簇碰顶又碰底）"
+            if res.spans:
+                return "起点未纵贯（格地有纵贯簇，但注水点在簇外）"
+            return "起点未纵贯，格地也没有纵贯簇"
         return "面积判据达标" if res.engulfed else "面积判据未达标"
 
     def _cancel_animation(self) -> None:
@@ -1216,7 +1289,9 @@ class SitePercolationApp:
     def _criterion_rule(self) -> str:
         """当前判据的简短说法（界面各处复用）。"""
         if self.model.criterion == "span":
-            return "判据 贯通（顶行 ↔ 底行）"
+            return "判据 贯通（格地有无纵贯簇）"
+        if self.model.criterion == "origin":
+            return "判据 起点纵贯（注水点的簇碰顶又碰底）"
         return f"判据 面积 ≥ {self.model.threshold:.0%}"
 
     def _update_result_labels(self) -> None:
@@ -1250,6 +1325,17 @@ class SitePercolationApp:
             self.vals["depth"].set(f"{min(self._shown_layers, res.depth)} / {res.depth} 层")
             self.vals["cost"].set(f"{res.elapsed * 1000:.1f} ms")
 
+        # 纵贯簇是格地本身的性质（与注水点无关），没有蔓延结果时也显示
+        nodes = self.model.spanning_nodes()
+        if nodes:
+            total = self.model.node_count
+            value = f"{len(nodes)} 格（{len(nodes) / total:.1%}）" if total else f"{len(nodes)} 格"
+            if res is not None:
+                value += "·水在簇内" if res.origin_in_spanning else "·水在簇外"
+        else:
+            value = "无"
+        self.vals["spanning"].set(value)
+
         # 顶部的结论徽章
         if res is None:
             self.badge.configure(text="— 等待计算 —", bg=PANEL_2, fg=FAINT)
@@ -1261,12 +1347,29 @@ class SitePercolationApp:
             # 贯通判据：结论看整片格地有没有纵贯簇，蔓延面积只是附带信息
             if res.spans:
                 self.badge.configure(
-                    text=f"✔ 存在纵贯簇（蔓延 {res.spread_ratio:.1%}）",
+                    text=f"✔ 存在纵贯簇（{res.spanning_count} 格，蔓延 {res.spread_ratio:.1%}）",
                     bg="#2b2340", fg="#c4b5fd",
                 )
             else:
                 self.badge.configure(
                     text=f"✘ 没有纵贯簇（蔓延 {res.spread_ratio:.1%}）",
+                    bg="#131c28", fg="#93c5fd",
+                )
+        elif res.criterion == "origin":
+            # 起点判据：最容易困惑的一档 —— 格地有纵贯簇，但火源在簇外
+            if res.origin_spans:
+                self.badge.configure(
+                    text=f"✔ 起点纵贯（蔓延 {res.spread_ratio:.1%}）",
+                    bg="#2b2340", fg="#c4b5fd",
+                )
+            elif res.spans:
+                self.badge.configure(
+                    text=f"✘ 起点在纵贯簇外（簇 {res.spanning_count} 格）",
+                    bg="#131c28", fg="#93c5fd",
+                )
+            else:
+                self.badge.configure(
+                    text=f"✘ 起点未纵贯（蔓延 {res.spread_ratio:.1%}）",
                     bg="#131c28", fg="#93c5fd",
                 )
         elif res.engulfed:
@@ -1317,7 +1420,7 @@ class SitePercolationApp:
         self._cancel.set()
         self.var_status.set("正在停止…")
 
-    def _batch_options(self) -> Dict[str, object]:
+    def _batch_options(self) -> Dict[str, Any]:
         model = self.model
         return {
             "lattice": model.lattice,
@@ -1331,24 +1434,28 @@ class SitePercolationApp:
         """做 N 次独立实验，统计当前判据下的成功频率与平均蔓延比例。"""
         if self._busy:
             return
+        # 先把界面上的形状 / 格子 / 方向 / 注水 / 判据 / 阈值全部同步进模型，
+        # 保证「统计的就是屏幕上看到的这一套设置」——不能依赖下拉框回调是否已经跑过
+        self._sync_model_params()
         rows, cols = self._current_shape()
         p = round(self.var_p.get(), 2)
         model = self.model
-        model.criterion = self._current_criterion()
-        model.threshold = self._current_threshold()
         trials = self._parse_int(self.var_trials.get(), 1000)
+        seed = self._current_seed()
         self._cancel.clear()
         self.progress.configure(maximum=trials, value=0)
         self._set_busy(
             True,
             f"正在统计：{model.lattice_name} {rows}×{cols}，"
-            f"{self._result_summary()}，p={p:.2f}，共 {trials} 次独立实验…",
+            f"{self._result_summary()}，p={p:.2f}，共 {trials} 次独立实验"
+            + (f"（种子 {seed}）" if seed is not None else "") + "…",
         )
 
         def job() -> None:
             try:
                 res = batch_spread_probability(
-                    rows=rows, cols=cols, p=p, trials=trials, **self._batch_options(),
+                    rows=rows, cols=cols, p=p, trials=trials, rng=seed,
+                    **self._batch_options(),
                     progress=lambda done, total, success: self._queue.put(
                         ("progress", (done, total))
                     ),
@@ -1364,10 +1471,11 @@ class SitePercolationApp:
         """扫描 p ∈ [0, 1]，绘制当前判据下的成功概率与平均蔓延比例曲线。"""
         if self._busy:
             return
+        # 同批量统计：先同步界面设置，曲线必须反映当前的形状 / 格子 / 方向 / 注水 / 判据
+        self._sync_model_params()
         rows, cols = self._current_shape()
         model = self.model
-        model.criterion = self._current_criterion()
-        model.threshold = self._current_threshold()
+        seed = self._current_seed()
         trials = self._parse_int(self.var_scan_trials.get(), 200, low=10)
         step = self._parse_float(self.var_scan_step.get(), 0.05, low=0.01, high=0.5)
         p_values = [round(i * step, 2) for i in range(int(round(1.0 / step)) + 1)]
@@ -1388,13 +1496,15 @@ class SitePercolationApp:
         self._set_busy(
             True,
             f"正在扫描占据密度（共 {len(p_values)} 个点，每点 {trials} 次实验，"
-            f"{self._result_summary()}）…",
+            f"{self._result_summary()}"
+            + (f"，种子 {seed}" if seed is not None else "") + "）…",
         )
 
         def job() -> None:
             try:
                 scan_curve(
-                    p_values, rows=rows, cols=cols, trials=trials, **self._batch_options(),
+                    p_values, rows=rows, cols=cols, trials=trials, rng=seed,
+                    **self._batch_options(),
                     progress=lambda done, total, res: self._queue.put(
                         ("scan_point", (done, total, res))
                     ),
@@ -1441,6 +1551,9 @@ class SitePercolationApp:
                 pc = self.model.theoretical_pc
                 tail = ("贯通判据下，成功概率 ≈ 1/2 的位置就是临界密度 p_c"
                         + (f" = {pc:.4f}。" if pc is not None else "（该组合暂无已知值）。"))
+            elif res.criterion == "origin":
+                tail = ("起点判据下，1/2 交点高于 p_c —— 它还额外要求"
+                        "「注水点落在纵贯簇里」；注水方式选「顶端整行」时才等于 p_c。")
             else:
                 tail = ("面积判据下这个概率随所设比例变化，其 1/2 交点不是 p_c"
                         "（想量 p_c 请把判据切到「贯通判据」）。")
@@ -1534,13 +1647,22 @@ class SitePercolationApp:
             )
             rows, trials = self._scan_meta
             cols = self._scan_cols or rows
-            rule = ("贯通判据" if span else f"面积判据 ≥ {self._scan_threshold:.0%}")
-            ax.set_title(
-                f"P(p) 曲线（{_label(LATTICE_CHOICES, self._scan_lattice)} {rows}×{cols} · "
-                f"{_label(DIRECTION_CHOICES, self._scan_direction)} · "
-                f"{rule}，每点 {trials} 次）",
-                fontsize=9, color=TEXT,
-            )
+            rule = {
+                "span": "贯通判据",
+                "origin": "起点判据",
+                "area": f"面积判据 ≥ {self._scan_threshold:.0%}",
+            }[self._scan_criterion]
+            inject_name = _label(SITE_INJECT_CHOICES, self._scan_inject)
+            title = (f"P(p) 曲线（{_label(LATTICE_CHOICES, self._scan_lattice)} "
+                     f"{rows}×{cols} · {_label(DIRECTION_CHOICES, self._scan_direction)} · "
+                     f"注水 {inject_name} · {rule}，每点 {trials} 次）")
+            # 把「本次曲线自己的 1/2 交点」标出来：它随长宽比移动，理论 p_c 不会动
+            cross = _half_crossing([(p, v / 100.0) for p, v in zip(xs, prob)])
+            if cross is not None:
+                pc = self._scan_pc
+                title += (f"\n1/2 交点 = {cross:.3f}（有限尺寸 + 长宽比决定；理论 p_c"
+                          + (f" = {pc:.4f}）" if pc is not None else " 未知）"))
+            ax.set_title(title, fontsize=9, color=TEXT)
             if pc is not None and max(prob) >= 100 and min(prob) <= 0:
                 ax.annotate(
                     "相变：量变引起质变",
@@ -1549,9 +1671,12 @@ class SitePercolationApp:
                     arrowprops=dict(arrowstyle="->", color=WARN, lw=1),
                 )
             elif not span:
+                note = ("起点判据：交点高于 p_c —— 还要看注水点是否落在纵贯簇里；"
+                        "注水方式选「顶端整行」时才等于 p_c"
+                        if self._scan_criterion == "origin" else
+                        "面积判据：曲线交点随「比例 / 网格尺寸 / 注水方式」变化，不是 p_c")
                 ax.text(
-                    0.03, 0.03,
-                    "面积判据：曲线交点随「比例 / 网格尺寸 / 注水方式」变化，不是 p_c",
+                    0.03, 0.03, note,
                     transform=ax.transAxes, ha="left", va="bottom",
                     fontsize=7.5, color=WARN,
                 )

@@ -21,7 +21,7 @@ from ...spec import ActionSpec, ModelSpec, ParamSpec
 from .._options import (
     DIRECTION_CHOICES,
     LATTICE_CHOICES,
-    SITE_CRITERION_CHOICES,
+    CRITERION_CHOICES,
     SITE_INJECT_CHOICES,
 )
 from .model import (
@@ -68,10 +68,12 @@ PARAMS = (
     ParamSpec(
         key="criterion", label="成功判据", kind="choice",
         default="贯通判据：顶行连通到底行（对应 p_c）",
-        choices=tuple(SITE_CRITERION_CHOICES), group="高级选项",
-        hint="两种判据回答的是两个不同的问题：\n"
-             "· 贯通判据：格地上是否存在顶行↔底行的纵贯簇 —— 这才是 p_c = 0.5927 的判据，"
+        choices=tuple(CRITERION_CHOICES), group="高级选项",
+        hint="三种判据回答的是三个不同的问题：\n"
+             "· 贯通判据：整片格地是否存在顶行↔底行的纵贯簇 —— 这才是 p_c = 0.5927 的判据，"
              "与注水方式无关；\n"
+             "· 起点判据：从注水点出发的那一簇是否纵贯 —— 随注水方式变化，"
+             "顶端整行时与贯通判据相同（随机起火常常落在纵贯簇之外）；\n"
              "· 面积判据：蔓延面积达到设定比例 —— 没有固定临界值，交点随比例、网格尺寸、"
              "注水方式一起变。",
     ),
@@ -159,7 +161,7 @@ def _options(params: Dict[str, Any]) -> Dict[str, Any]:
         "lattice": _pick(LATTICE_CHOICES, params.get("lattice"), "square"),
         "direction": _pick(DIRECTION_CHOICES, params.get("direction"), "undirected"),
         "inject": _pick(SITE_INJECT_CHOICES, params.get("inject"), "random"),
-        "criterion": _pick(SITE_CRITERION_CHOICES, params.get("criterion"), DEFAULT_CRITERION),
+        "criterion": _pick(CRITERION_CHOICES, params.get("criterion"), DEFAULT_CRITERION),
         "threshold": _resolve_threshold(params.get("threshold")),
     }
 
@@ -204,8 +206,15 @@ def _handle_spread(params: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str,
         "criterionName": model.criterion_name,
         "criterionHint": CRITERION_DESCRIPTIONS[model.criterion],
         "threshold": result.threshold,
+        "nodeCount": model.node_count,      # 与边渗流同名，方便前端通用处理
         # 整片格地是否存在纵贯簇（与注水点无关，贯通判据就看这个）
         "spans": result.spans,
+        # 从注水点出发的簇是否纵贯（起点判据看这个）
+        "originSpans": result.origin_spans,
+        "spanningCount": result.spanning_count,
+        "spanningRatio": result.spanning_ratio,
+        "spanningNodes": result.spanning_nodes,
+        "originInSpanning": result.origin_in_spanning,
         "theoreticalPc": model.theoretical_pc,
         "pcApplies": model.pc_applies,
         "pcIsEstimate": model.pc_is_estimate,
@@ -316,10 +325,15 @@ def _cli(args) -> int:
                "criterion": criterion}
     shape = f"{rows}×{cols}" if rows != cols else f"{rows}×{rows}"
     probe = SitePercolation(rows=rows, cols=cols, p=p, **options)
+    # 判据名称由下一行的 rule 给出，这里只放临界值说明，避免「判据：… | 判据：…」重复
     header = (f"{probe.lattice_name} {shape} | {probe.direction_name} | "
-              f"注水：{probe.inject_name} | 判据：{probe.criterion_name} | {probe.pc_label}")
-    rule = ("贯通判据：格地上是否存在纵贯簇" if criterion == "span"
-            else f"面积判据：蔓延比例 ≥ {threshold:.0%}")
+              f"注水：{probe.inject_name} | {probe.pc_label}")
+    if criterion == "span":
+        rule = "贯通判据：整片格地是否存在纵贯簇"
+    elif criterion == "origin":
+        rule = "起点判据：从注水点出发的簇是否纵贯顶底"
+    else:
+        rule = f"面积判据：蔓延比例 ≥ {threshold:.0%}"
 
     if getattr(args, "scan", False):
         step = float(getattr(args, "step", 0.05))
@@ -350,6 +364,9 @@ def _cli(args) -> int:
         print("-" * 78)
         if criterion == "span":
             print("提示：成功概率 = 1/2 的交点即临界密度 p_c（p 越过它，纵贯簇出现 —— 相变）。")
+        elif criterion == "origin":
+            print("提示：起点判据的交点高于 p_c —— 它额外要求「起点落在纵贯簇里」；")
+            print("      注水方式选「顶端整行」时它与贯通判据完全相同。")
         else:
             print("提示：面积判据的交点不是固定临界值，它随所设比例、网格尺寸、注水方式变化；")
             print("      只有「贯通判据」的交点才等于 p_c。")
@@ -374,7 +391,15 @@ def _cli(args) -> int:
     bottom = "已到达底端" if single.reached_bottom else "未到达底端"
     if criterion == "span":
         verdict = "存在纵贯簇 ✔" if single.spans else "没有纵贯簇 ✘"
-        print(f"整片格地是否存在纵贯簇（顶行 ↔ 底行）：{verdict}；本次蔓延{bottom}。")
+        print(f"整片格地是否存在纵贯簇（顶行 ↔ 底行）：{verdict}"
+              f"（纵贯簇 {single.spanning_count} 格，{single.spanning_ratio:.1%}）；"
+              f"本次蔓延{bottom}。")
+    elif criterion == "origin":
+        verdict = "纵贯 ✔" if single.origin_spans else "未纵贯 ✘"
+        note = "" if single.spans else "（格地上本来就没有纵贯簇）"
+        inside = "在簇内" if single.origin_in_spanning else "在簇外"
+        print(f"从注水点出发的簇是否纵贯顶行与底行：{verdict}{note}；"
+              f"注水点{inside}；本次蔓延{bottom}。")
     else:
         verdict = f"达到 ≥{threshold:.0%} ✔" if single.engulfed else f"不足 {threshold:.0%} ✘"
         print(f"本次蔓延比例 {single.spread_ratio:.1%}，{verdict}；{bottom}。")
@@ -400,22 +425,27 @@ def build_spec() -> ModelSpec:
         topic="量变引起质变",
         summary="每格以概率 p 被占据，从注水点沿相邻占据格蔓延："
                 "密度越过临界值后出现纵贯整片格地的巨簇，一次偶然的起因就能烧成一片。"
-                "注意区分「贯通判据」（对应 p_c = 0.5927）与「面积判据」（无固定阈值）。",
+                "三种判据要分清：贯通（对 p_c = 0.5927）、起点纵贯（随注水方式变化）、"
+                "面积比例（无固定阈值）。",
         description=(
             "把格地看成 rows × cols 的方格：每格以概率 p 独立地被占据（其余为空位），"
             "只有相邻的占据格之间才连通。从注水点出发蔓延，最终蔓延范围就是包含注水点的"
             "那个连通簇 —— 抽象地说，这就是「随机一棵树起火，火只沿上下左右烧，"
             "最终烧掉多大面积」的问题。\n\n"
-            "**先分清两种「成功」的标准，它们的临界值完全不是一回事：**\n\n"
-            "1. 贯通判据（默认）：格地上是否存在从顶行连通到底行的**纵贯簇**。"
+            "**先分清三种「成功」的标准，它们的临界值完全不是一回事：**\n\n"
+            "1. 贯通判据（默认）：整片格地上是否存在从顶行连通到底行的**纵贯簇**。"
             "二维方格点渗流（无向）的理论临界密度 p_c ≈ 0.5927 说的就是这个相变，"
             "所以它的「成功概率 = 1/2」交点落在 p_c 上，且与注水方式无关。"
             "（注意它高于方格网**边**渗流的 0.5 —— 随机的是格子而不是边；"
             "三角网点渗流 p_c = 0.5。）\n\n"
-            "2. 面积判据：从注水点出发的蔓延面积达到设定比例。它回答的是「一次起因"
+            "2. 起点判据：**从注水点出发的那一簇**是否纵贯（碰到顶行与底行）。"
+            "它与贯通判据的唯一差别是「还要求注水点落在纵贯簇里」：顶端整行注水时"
+            "两者完全相同，随机 / 中心单点注水时交点明显更高 —— 格地上明明有纵贯簇，"
+            "一次随机起火却可能烧在簇外，只覆盖很小一片。\n\n"
+            "3. 面积判据：从注水点出发的蔓延面积达到设定比例。它回答的是「一次起因"
             "能烧掉多大面积」，**没有固定的临界密度**：比例定得越大交点越高，"
-            "单点注水还会额外要求「起点恰好落在巨簇里」，网格尺寸也会影响它。"
-            "把这条曲线的交点当成 p_c 是常见误解。\n\n"
+            "单点注水还会额外要求「起点恰好落在巨簇里」，网格尺寸也会影响它。\n\n"
+            "后两种判据的交点都**不是** p_c（把它们的交点当成 p_c 是常见误解）；"
             "方向模式会改变临界值（只允许向下/向右的有向点渗流临界密度更高）；"
             "而矩形长宽比与注水点位置都不改变临界值，只影响有限尺寸下的曲线形状"
             "—— 这些结论都只在贯通判据下成立。"
@@ -427,7 +457,7 @@ def build_spec() -> ModelSpec:
         icon="▦",
         handler=handle,
         cli=_cli,
-        highlights=("两种成功判据：贯通（对 p_c）与面积（无固定阈值）",
+        highlights=("三种成功判据：贯通（对 p_c）/ 起点纵贯（随注水方式）/ 面积比例",
                     "方格网 p_c ≈ 0.5927 / 三角网 0.5",
                     "矩形格地 + 四种方向模式 + 三种注水方式"),
         order=20,

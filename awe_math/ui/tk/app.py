@@ -11,9 +11,15 @@
 ----------------------------------------
 * 左侧控制栏：流通概率 p、网格尺寸、面积判据阈值、成功判据、格子类型、方向模式、
   注水方式、动画速度、批量统计与曲线扫描参数、各类按钮。
-* 中央画布：绘制全部边与节点（流通边实线、阻断边虚线），并以逐层动画展示水的渗透
-  过程（浸润节点按层数着色），**点击节点可指定注水点**。方格网与三角网共用同一套
+* 中央画布：绘制全部边与节点（流通边灰白实线、阻断边暗色虚线），并以逐层动画展示水的
+  渗透过程（浸润节点按层数着色），**点击节点可指定注水点**。方格网与三角网共用同一套
   绘制逻辑，差别只在于节点的单位坐标与边表。
+
+  配色分工（与点渗流视图一致）：**基底走中性灰，饱和颜色留给判据关注的对象** ——
+  纵贯簇用青色（簇内节点与簇内流通边都变青，连成一条贯通路线），
+  浸润路径用琥珀→红，注水点蓝色描边、底端出口绿色描边。灰白的流通边与暗色虚线化的
+  阻断边只靠明度、虚实与粗细区分，避免跟青色纵贯簇抢眼（原本流通边是青蓝，
+  与青绿纵贯簇撞色）。
 * 右侧面板（三个标签页）：
   1. 「单次结果」——当前 p、格子与规模、注水点、浸润节点数与比例、结论徽章；
   2. 「批量统计」——成功概率、平均浸润比例与多次实验的历史记录表；
@@ -107,12 +113,19 @@ except ImportError:  # 允许直接运行本文件（把项目根目录加入 im
     )
 
 # 画布配色
+#
+# 分工（与点渗流视图一致）：**基底用中性灰、判据关注的对象用青色**。
+# 流通边原本是青蓝 #2fa9c9，与纵贯簇的青绿 #2dd4bf 色相相邻、明度也接近，
+# 屏幕上分不清「哪些是普通流通边、哪些属于纵贯簇」，所以流通边改成灰白，
+# 只靠明度与虚线/粗细区分流通/阻断，把饱和的青色全部让给纵贯簇。
 BG_CANVAS = "#0c1118"       # 画布背景
-COL_BLOCKED = "#333f4f"     # 阻断边
-COL_OPEN = "#2fa9c9"        # 流通边
+COL_BLOCKED = "#2a333f"     # 阻断边（更暗：与灰白流通边拉开明度差）
+COL_OPEN = "#93a1b3"        # 流通边（灰白：不跟青色纵贯簇抢眼）
 COL_WET_EDGE = "#ffb703"    # 已被水浸透的流通边
 COL_NODE = "#5b6878"        # 未浸润节点
 COL_NODE_EDGE = "#0a0e13"   # 节点描边
+COL_SPAN_FILL = "#12433c"   # 纵贯簇（顶行 ↔ 底行连通的簇）的填充
+COL_SPAN_EDGE = "#2dd4bf"   # 纵贯簇描边（与点渗流视图保持一致）
 COL_TOP = "#4dabf7"         # 注水点
 COL_BOTTOM = "#51cf66"      # 底端出口
 COL_WET_FROM = (255, 222, 118)   # 早层浸润色（黄）
@@ -151,7 +164,7 @@ except Exception as _exc:  # pragma: no cover - 环境缺库时降级
     _MPL_ERROR = str(_exc)
 
 
-def _spec_defaults(spec) -> Dict[str, object]:
+def _spec_defaults(spec) -> Dict[str, Any]:
     """从模型元数据里取出参数默认值（没有传入 spec 时用渗流模型的默认值）。"""
     if spec is None:
         return {"p": 0.5, "rows": 30, "cols": 30}
@@ -169,6 +182,19 @@ def _label(mapping: Dict[str, str], value: str) -> str:
         if key == value:
             return text
     return next(iter(mapping))
+
+
+def _half_crossing(points: Sequence[Tuple[float, float]]) -> Optional[float]:
+    """线性插值求曲线与 50% 的交点（扫描范围内跨不过 50% 时返回 None）。
+
+    这个交点是**有限尺寸 + 网格长宽比**一起决定的结果，和理论 p_c（无限大格子、
+    只由格子与方向决定）不是一回事：长宽比一变，它就跟着移动
+    （例如方格网无向：20×20 约 0.50、20×60 约 0.45、60×20 约 0.54）。
+    """
+    for (p1, v1), (p2, v2) in zip(points, points[1:]):
+        if v1 != v2 and (v1 - 0.5) * (v2 - 0.5) <= 0:
+            return p1 + (p2 - p1) * (0.5 - v1) / (v2 - v1)
+    return None
 
 
 class PercolationApp:
@@ -222,6 +248,7 @@ class PercolationApp:
         self._scan_cols = 0                              # 曲线对应的列数
         self._scan_lattice = self.grid_model.lattice     # 曲线对应的格子类型
         self._scan_direction = self.grid_model.direction  # 曲线对应的方向模式
+        self._scan_inject = self.grid_model.inject       # 曲线对应的注水方式
         self._scan_criterion = self.grid_model.criterion  # 曲线对应的成功判据
         self._scan_threshold = init_threshold            # 曲线对应的面积判据阈值
         self._scan_pc = self.grid_model.theoretical_pc   # 曲线对应的阈值（可能为 None）
@@ -232,6 +259,7 @@ class PercolationApp:
         self.var_cols = tk.IntVar(value=init_cols)
         self.var_speed = tk.IntVar(value=35)
         self.var_threshold = tk.StringVar(value=f"{init_threshold:g}")
+        self.var_seed = tk.StringVar(value=str(defaults.get("seed", -1)))
         self.var_trials = tk.StringVar(value=str(defaults.get("trials", "1000")))
         self.var_scan_trials = tk.StringVar(value=str(defaults.get("scanTrials", "200")))
         self.var_scan_step = tk.StringVar(value=str(defaults.get("scanStep", "0.05")))
@@ -252,6 +280,7 @@ class PercolationApp:
             "origins": tk.StringVar(value="-"),
             "wet": tk.StringVar(value="-"),
             "ratio": tk.StringVar(value="-"),
+            "spanning": tk.StringVar(value="-"),
             "depth": tk.StringVar(value="-"),
             "cost": tk.StringVar(value="-"),
             "b_p": tk.StringVar(value="-"),
@@ -372,6 +401,13 @@ class PercolationApp:
         threshold.pack(side="right")
         threshold.bind("<<ComboboxSelected>>", lambda _e: self.regenerate_grid())
 
+        seed_row = ttk.Frame(card, style="Card.TFrame")
+        seed_row.pack(fill="x", pady=(0, 6))
+        ttk.Label(seed_row, text="统计种子（-1 = 随机）", style="Card.TLabel").pack(side="left")
+        ttk.Spinbox(
+            seed_row, from_=-1, to=2147483647, width=11, textvariable=self.var_seed,
+        ).pack(side="right")
+
         speed_row = ttk.Frame(card, style="Card.TFrame")
         speed_row.pack(fill="x")
         ttk.Label(speed_row, text="动画间隔", style="Card.TLabel").pack(side="left")
@@ -435,24 +471,39 @@ class PercolationApp:
             value = DEFAULT_THRESHOLD
         return min(1.0, max(0.05, value))
 
+    def _current_seed(self) -> Optional[int]:
+        """统计用的随机种子：≥0 时批量统计/曲线完全可复现，-1 表示随机。
+
+        固定种子后，「同一片网格上换判据 / 换注水方式」的横向比较才是严格可比的
+        （否则只能看到蒙特卡洛噪声，例如贯通判据本应与注水方式无关）。
+        """
+        try:
+            value = int(float(self.var_seed.get()))
+        except (TypeError, ValueError):
+            return None
+        return None if value < 0 else value
+
     def _criterion_rule(self) -> str:
         """当前判据的简短说法（界面各处复用）。"""
         if self.grid_model.criterion == "span":
-            return "判据 贯通（顶行 ↔ 底行）"
+            return "判据 贯通（网格有无纵贯簇）"
+        if self.grid_model.criterion == "origin":
+            return "判据 起点纵贯（注水点的簇碰顶又碰底）"
         return f"判据 面积 ≥ {self.grid_model.threshold:.0%}"
 
     def _refresh_criterion_texts(self) -> None:
         """判据变化后，刷新那些「随判据改变含义」的界面文案。"""
-        span = self.grid_model.criterion == "span"
-        head = "存在纵贯簇" if span else "面积达标"
+        criterion = self.grid_model.criterion
+        head = {"span": "存在纵贯簇", "origin": "起点纵贯", "area": "面积达标"}[criterion]
+        short = {"span": "贯通", "origin": "起点", "area": "面积"}[criterion]
         self._set_stat_label("b_success", f"{head}次数")
         self._set_stat_label("b_prob", f"{head}概率")
         self.lbl_threshold.configure(
-            text="面积判据阈值" if not span else "面积判据阈值（贯通判据下不生效）",
-            foreground=DIM if not span else FAINT,
+            text="面积判据阈值" if criterion == "area" else "面积判据阈值（面积判据下才生效）",
+            foreground=DIM if criterion == "area" else FAINT,
         )
         try:
-            self.tree.heading("success", text="贯通" if span else "面积")
+            self.tree.heading("success", text=short)
         except tk.TclError:      # 视图销毁过程中可能已被回收
             pass
 
@@ -498,8 +549,12 @@ class PercolationApp:
         self.grid_model.inject = inject
         if self.grid_model.criterion == "span":
             message = (f"注水方式：{self.grid_model.inject_name}。"
-                       "贯通判据只看整张网格有没有纵贯水路，与注水位置无关 —— "
+                       "贯通判据只看整张网格有没有纵贯簇，与注水位置无关 —— "
                        "它只影响单次动画的起点。")
+        elif self.grid_model.criterion == "origin":
+            message = (f"注水方式：{self.grid_model.inject_name}。"
+                       "起点判据下注水位置影响很大 —— 顶端整行一定在纵贯簇上，"
+                       "随机/中心单点则可能落在簇外（只浸透一小片）。")
         else:
             message = (f"注水方式：{self.grid_model.inject_name}。"
                        "面积判据下起始位置影响很大：单点注水额外要求「起点落在巨簇里」，"
@@ -519,9 +574,15 @@ class PercolationApp:
         self.regenerate_grid()
         if criterion == "span":
             self.var_status.set(
-                "已切换为「贯通判据」：判定整张网格上是否存在顶行↔底行的纵贯水路。"
-                "它的成功概率 = 1/2 交点就是临界值 p_c（方格网无向 = 1/2），"
-                "且与注水方式无关。"
+                "已切换为「贯通判据」：判定**整张网格**上是否存在顶行↔底行的纵贯簇"
+                "（青色节点）。它的成功概率 = 1/2 交点就是临界值 p_c"
+                "（方格网无向 = 1/2），且与注水方式无关。"
+            )
+        elif criterion == "origin":
+            self.var_status.set(
+                "已切换为「起点判据」：判定**从注水点出发的那一簇**是否纵贯（碰到顶行"
+                "与底行）。它与贯通判据的差别是「还要求注水点落在纵贯簇里」，"
+                "所以交点高于 p_c —— 随机注水常常落在簇外。"
             )
         else:
             self.var_status.set(
@@ -617,6 +678,7 @@ class PercolationApp:
         items = [
             ("line", COL_OPEN, "流通边"),
             ("dash", COL_BLOCKED, "阻断边"),
+            ("dot", COL_SPAN_FILL, "纵贯簇"),
             ("dot", COL_NODE, "未浸润节点"),
             ("dot", lerp_color(COL_WET_FROM, COL_WET_TO, 0.5), "已浸润节点"),
             ("dot", COL_TOP, "注水点"),
@@ -677,6 +739,7 @@ class PercolationApp:
             ("注水点", "origins"),
             ("浸润节点数", "wet"),
             ("浸润比例", "ratio"),
+            ("纵贯簇", "spanning"),
             ("渗透层数", "depth"),
             ("判定耗时", "cost"),
         ]
@@ -696,15 +759,14 @@ class PercolationApp:
             text=(
                 "说明：\n"
                 "· 每条边以概率 p 独立地流通或阻断，水从注水点沿流通边蔓延；\n"
-                "· 两种「成功」判据必须分清：\n"
-                "  · 贯通判据 = 整张网格存在顶行↔底行的纵贯水路 —— p_c 说的就是\n"
-                "    这个相变（方格网 0.5、三角网 ≈ 0.3473、有向 ≈ 0.6447），\n"
-                "    且与注水方式无关；\n"
+                "· 青色节点是**纵贯簇**：同时连通顶行与底行的那一串节点。三种判据：\n"
+                "  · 贯通判据 = 网格上有没有纵贯簇 —— p_c 说的就是这个相变\n"
+                "    （方格网 0.5、三角网 ≈ 0.3473、有向 ≈ 0.6447），与注水方式无关；\n"
+                "  · 起点判据 = 你这次注水的那一簇是否纵贯 —— 随机/中心注水经常\n"
+                "    落在簇外，所以交点高于 p_c（顶端整行注水时两者相同）；\n"
                 "  · 面积判据 = 浸润面积达到设定比例 —— 没有固定临界值，交点随\n"
-                "    比例、网格尺寸、注水方式一起漂移（比例越大交点越高）；\n"
-                "· 临界值只取决于「格子 + 方向」；矩形长宽比与注水位置不改变它，\n"
-                "  只改变有限尺寸下的曲线形状；\n"
-                "· 点击网格上的节点，可以把水从那里开始注。"
+                "    比例、网格尺寸、注水方式一起漂移；\n"
+                "· 只有贯通判据的 1/2 交点等于 p_c；点击节点可指定注水点。"
             ),
         ).grid(row=sep_row + 1, column=0, columnspan=2, sticky="w")
 
@@ -967,12 +1029,18 @@ class PercolationApp:
         self._node_items = [None] * model.node_count
         #: 边 -> 画布元素；键是 (较小的节点索引, 较大的节点索引)
         self._edge_items = {}
+        # 纵贯簇单独上色：判据问的就是「有没有这么一串节点纵贯顶底」，
+        # 不画出来的话，「判定贯通 + 浸润面积很小」会显得莫名其妙
+        spanning = set(model.spanning_nodes())
 
         for a, b in model.iter_all_edges():
             x1, y1 = xy[a]
             x2, y2 = xy[b]
             if model.is_open(a, b):
-                item = cv.create_line(x1, y1, x2, y2, fill=COL_OPEN, width=lw_open)
+                # 纵贯簇内部的流通边跟着簇一起变青：整条贯通路线连成一条青色路径
+                color = (COL_SPAN_EDGE if (a in spanning and b in spanning)
+                         else COL_OPEN)
+                item = cv.create_line(x1, y1, x2, y2, fill=color, width=lw_open)
             else:
                 item = cv.create_line(x1, y1, x2, y2, fill=COL_BLOCKED,
                                       width=lw_block, dash=(2, 3))
@@ -987,15 +1055,20 @@ class PercolationApp:
             sources = set(model.source_nodes())
         last_row_start = (model.rows - 1) * model.cols
         for idx, (x, y) in enumerate(xy):
+            # 描边表达「角色」（注水点蓝、底端出口绿），填充表达「是否在纵贯簇里」，
+            # 两者叠加正好说明「这个簇是否既碰顶又碰底」
             if idx in sources:
                 outline, ow = COL_TOP, 1.6
             elif idx >= last_row_start:
                 outline, ow = COL_BOTTOM, 1.6
+            elif idx in spanning:
+                outline, ow = COL_SPAN_EDGE, 1.2
             else:
                 outline, ow = COL_NODE_EDGE, 1
+            fill = COL_SPAN_FILL if idx in spanning else COL_NODE
             self._node_items[idx] = cv.create_oval(
                 x - radius, y - radius, x + radius, y + radius,
-                fill=COL_NODE, outline=outline, width=ow,
+                fill=fill, outline=outline, width=ow,
             )
 
         # 当前配置 / 出口提示
@@ -1025,8 +1098,10 @@ class PercolationApp:
             item = node_items[idx]
             if item is not None:
                 cv.itemconfigure(item, fill=color)
-            # 沿「真正流通的边」找已经浸润的邻居：方格网 / 三角网通用
-            for nb in self.grid_model.neighbors(idx):
+            # 找已经浸润的邻居给这条边染色。必须用 traversable_neighbors 而不是
+            # neighbors：后者只给「出边」，有向模式下从后来浸润的节点看前一个节点是
+            # 「逆方向」的，那条边就漏色了（三角网 + 方向限制时最明显）。
+            for nb in self.grid_model.traversable_neighbors(idx):
                 if nb not in self._wet:
                     continue
                 it = edges.get((idx, nb) if idx < nb else (nb, idx))
@@ -1078,9 +1153,20 @@ class PercolationApp:
         res = self.result
         if res.criterion == "span":
             ok = res.spans
-            text = ("✔ 网格存在纵贯水路（顶行 ↔ 底行）"
-                    if ok else "✘ 网格没有纵贯水路")
+            text = ("✔ 网格存在纵贯簇（顶行 ↔ 底行）"
+                    if ok else "✘ 网格没有纵贯簇")
             text += f"；本次注水浸润 {res.wet_ratio:.1%}"
+        elif res.criterion == "origin":
+            ok = res.origin_spans
+            if ok:
+                text = (f"✔ 起点纵贯：注水的这一簇碰到顶行与底行"
+                        f"（浸润 {res.wet_ratio:.1%}）")
+            elif res.spans:
+                text = (f"✘ 起点未纵贯：网格有纵贯簇（{res.spanning_count} 节点，青色），"
+                        f"但注水点不在簇内（浸润 {res.wet_ratio:.1%}）")
+            else:
+                text = (f"✘ 起点未纵贯，网格也没有纵贯簇"
+                        f"（浸润 {res.wet_ratio:.1%}）")
         else:
             ok = res.engulfed
             text = (f"✔ 面积判据达标：浸润 {res.wet_ratio:.1%}（≥{res.threshold:.0%}）"
@@ -1224,21 +1310,49 @@ class PercolationApp:
             self.vals["depth"].set(f"{shown} / {len(res.layers)} 层")
             self.vals["cost"].set(f"{res.elapsed * 1000:.1f} ms")
 
+        # 纵贯簇是网格本身的性质（与注水点无关），没有模拟结果时也显示
+        nodes = self.grid_model.spanning_nodes()
+        if nodes:
+            total = self.grid_model.node_count
+            value = f"{len(nodes)} 节点（{len(nodes) / total:.1%}）" if total else f"{len(nodes)} 节点"
+            if res is not None:
+                value += "·水在簇内" if res.origin_in_spanning else "·水在簇外"
+        else:
+            value = "无"
+        self.vals["spanning"].set(value)
+
         # 顶部的结论徽章（随判据变化）
         if res is None:
             self.badge.configure(text="— 等待计算 —", bg=PANEL_2, fg=FAINT)
         elif self._shown_layers < len(res.layers):
             self.badge.configure(text="渗透中 …", bg=PANEL_2, fg=WARN)
         elif res.criterion == "span":
-            # 贯通判据：结论看整张网格有没有纵贯水路，浸润面积只是附带信息
+            # 贯通判据：结论看整张网格有没有纵贯簇，浸润面积只是附带信息
             if res.spans:
                 self.badge.configure(
-                    text=f"✔ 存在纵贯水路（浸润 {res.wet_ratio:.1%}）",
+                    text=f"✔ 存在纵贯簇（{res.spanning_count} 节点，浸润 {res.wet_ratio:.1%}）",
                     bg="#2b2340", fg="#c4b5fd",
                 )
             else:
                 self.badge.configure(
-                    text=f"✘ 没有纵贯水路（浸润 {res.wet_ratio:.1%}）",
+                    text=f"✘ 没有纵贯簇（浸润 {res.wet_ratio:.1%}）",
+                    bg="#131c28", fg="#93c5fd",
+                )
+        elif res.criterion == "origin":
+            # 起点判据：最容易困惑的一档 —— 网格有纵贯簇，但注水点在簇外
+            if res.origin_spans:
+                self.badge.configure(
+                    text=f"✔ 起点纵贯（浸润 {res.wet_ratio:.1%}）",
+                    bg="#2b2340", fg="#c4b5fd",
+                )
+            elif res.spans:
+                self.badge.configure(
+                    text=f"✘ 起点在纵贯簇外（簇 {res.spanning_count} 节点）",
+                    bg="#131c28", fg="#93c5fd",
+                )
+            else:
+                self.badge.configure(
+                    text=f"✘ 起点未纵贯（浸润 {res.wet_ratio:.1%}）",
                     bg="#131c28", fg="#93c5fd",
                 )
         elif res.engulfed:
@@ -1263,7 +1377,13 @@ class PercolationApp:
     def _verdict_phrase(res: SimResult) -> str:
         """把一次模拟的结果说成一句话（随判据变化）。"""
         if res.criterion == "span":
-            return "网格存在纵贯水路" if res.spans else "网格没有纵贯水路"
+            return "网格存在纵贯簇" if res.spans else "网格没有纵贯簇"
+        if res.criterion == "origin":
+            if res.origin_spans:
+                return "起点纵贯（注水的这一簇碰顶又碰底）"
+            if res.spans:
+                return "起点未纵贯（网格有纵贯簇，但注水点在簇外）"
+            return "起点未纵贯，网格也没有纵贯簇"
         return "面积判据达标" if res.engulfed else "面积判据未达标"
 
     def _insert_history(self, res: BatchResult, tag: str) -> None:
@@ -1303,7 +1423,7 @@ class PercolationApp:
         self._cancel.set()
         self.var_status.set("正在停止…")
 
-    def _batch_options(self) -> Dict[str, object]:
+    def _batch_options(self) -> Dict[str, Any]:
         model = self.grid_model
         return {
             "lattice": model.lattice,
@@ -1317,25 +1437,28 @@ class PercolationApp:
         """对当前 p 值做 N 次独立模拟，统计当前判据下的成功频率。"""
         if self._busy:
             return
+        # 先把界面上的形状 / 格子 / 方向 / 注水 / 判据 / 阈值全部同步进模型，
+        # 保证「统计的就是屏幕上看到的这一套设置」——不能依赖下拉框回调是否已经跑过
+        self._sync_model_params()
         rows, cols = self._current_shape()
         p = round(self.var_p.get(), 2)
         model = self.grid_model
-        model.criterion = self._current_criterion()
-        model.threshold = self._current_threshold()
         trials = self._parse_int(self.var_trials.get(), 1000)
+        seed = self._current_seed()
         options = self._batch_options()
         self._cancel.clear()
         self.progress.configure(maximum=trials, value=0)
         self._set_busy(
             True,
             f"正在统计：{model.lattice_name} {rows}×{cols}，"
-            f"{self._result_summary()}，p={p:.2f}，共 {trials} 次独立模拟…",
+            f"{self._result_summary()}，p={p:.2f}，共 {trials} 次独立模拟"
+            + (f"（种子 {seed}）" if seed is not None else "") + "…",
         )
 
         def job() -> None:
             try:
                 res = batch_percolation_probability(
-                    rows=rows, cols=cols, p=p, trials=trials, **options,
+                    rows=rows, cols=cols, p=p, trials=trials, rng=seed, **options,
                     progress=lambda done, total, success: self._queue.put(("progress", (done, total))),
                     cancel=self._cancel,
                 )
@@ -1349,6 +1472,8 @@ class PercolationApp:
         """扫描 p ∈ [0, 1]，绘制当前判据下的成功概率与平均浸润比例曲线。"""
         if self._busy:
             return
+        # 同批量统计：先同步界面设置，曲线必须反映当前的形状 / 格子 / 方向 / 注水 / 判据
+        self._sync_model_params()
         rows, cols = self._current_shape()
         trials = self._parse_int(self.var_scan_trials.get(), 200, low=10)
         step = self._parse_float(self.var_scan_step.get(), 0.05, low=0.01, high=0.5)
@@ -1356,8 +1481,7 @@ class PercolationApp:
         p_values = [p for p in p_values if p <= 1.0]
 
         model = self.grid_model
-        model.criterion = self._current_criterion()
-        model.threshold = self._current_threshold()
+        seed = self._current_seed()
         options = self._batch_options()
         self._cancel.clear()
         self._scan_results = []
@@ -1365,6 +1489,7 @@ class PercolationApp:
         self._scan_cols = cols
         self._scan_lattice = model.lattice
         self._scan_direction = model.direction
+        self._scan_inject = model.inject
         self._scan_criterion = model.criterion
         self._scan_threshold = model.threshold
         self._scan_pc = model.theoretical_pc
@@ -1373,13 +1498,14 @@ class PercolationApp:
         self._set_busy(
             True,
             f"正在扫描 p（共 {len(p_values)} 个点，每点 {trials} 次，"
-            f"{self._result_summary()}）…",
+            f"{self._result_summary()}"
+            + (f"，种子 {seed}" if seed is not None else "") + "）…",
         )
 
         def job() -> None:
             try:
                 scan_curve(
-                    p_values, rows=rows, cols=cols, trials=trials, **options,
+                    p_values, rows=rows, cols=cols, trials=trials, rng=seed, **options,
                     progress=lambda done, total, res: self._queue.put(("scan_point", (done, total, res))),
                     cancel=self._cancel,
                 )
@@ -1424,6 +1550,9 @@ class PercolationApp:
                 pc = self.grid_model.theoretical_pc
                 tail = ("贯通判据下，成功概率 ≈ 1/2 的位置就是临界值 p_c"
                         + (f" = {pc:.4f}。" if pc is not None else "（该组合暂无已知值）。"))
+            elif res.criterion == "origin":
+                tail = ("起点判据下，1/2 交点高于 p_c —— 它还额外要求"
+                        "「注水点落在纵贯簇里」；注水方式选「顶端整行」时才等于 p_c。")
             else:
                 tail = ("面积判据下这个概率随所设比例变化，其 1/2 交点不是 p_c"
                         "（想量 p_c 请把判据切到「贯通判据」）。")
@@ -1520,12 +1649,21 @@ class PercolationApp:
             cols = self._scan_cols or rows
             lattice_name = _label(LATTICE_CHOICES, self._scan_lattice)
             direction_name = _label(DIRECTION_CHOICES, self._scan_direction)
-            rule = ("贯通判据" if span else f"面积判据 ≥ {self._scan_threshold:.0%}")
-            ax.set_title(
-                f"P(p) 曲线（{lattice_name} {rows}×{cols} · {direction_name} · "
-                f"{rule}，每点 {trials} 次）",
-                fontsize=9, color=TEXT,
-            )
+            rule = {
+                "span": "贯通判据",
+                "origin": "起点判据",
+                "area": f"面积判据 ≥ {self._scan_threshold:.0%}",
+            }[self._scan_criterion]
+            inject_name = _label(INJECT_CHOICES, self._scan_inject)
+            title = (f"P(p) 曲线（{lattice_name} {rows}×{cols} · {direction_name} · "
+                     f"注水 {inject_name} · {rule}，每点 {trials} 次）")
+            # 把「本次曲线自己的 1/2 交点」标出来：它随长宽比移动，理论 p_c 不会动
+            cross = _half_crossing([(p, v / 100.0) for p, v in zip(xs, prob)])
+            if cross is not None:
+                pc = self._scan_pc
+                title += (f"\n1/2 交点 = {cross:.3f}（有限尺寸 + 长宽比决定；理论 p_c"
+                          + (f" = {pc:.4f}）" if pc is not None else " 未知）"))
+            ax.set_title(title, fontsize=9, color=TEXT)
             if pc is not None and prob and max(prob) >= 100 and min(prob) <= 0:
                 ax.annotate(
                     "相变：量变引起质变",
@@ -1534,9 +1672,12 @@ class PercolationApp:
                     arrowprops=dict(arrowstyle="->", color=WARN, lw=1),
                 )
             elif not span:
+                note = ("起点判据：交点高于 p_c —— 还要看注水点是否落在纵贯簇里；"
+                        "注水方式选「顶端整行」时才等于 p_c"
+                        if self._scan_criterion == "origin" else
+                        "面积判据：曲线交点随「比例 / 网格尺寸 / 注水方式」变化，不是 p_c")
                 ax.text(
-                    0.03, 0.03,
-                    "面积判据：曲线交点随「比例 / 网格尺寸 / 注水方式」变化，不是 p_c",
+                    0.03, 0.03, note,
                     transform=ax.transAxes, ha="left", va="bottom",
                     fontsize=7.5, color=WARN,
                 )

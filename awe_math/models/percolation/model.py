@@ -30,7 +30,7 @@
 
 * **成功判据** ``criterion``：``span``（贯通）/ ``area``（面积），见下。
 
-两种成功判据（务必区分）
+三种成功判据（务必区分）
 ------------------------
 ``criterion`` 决定「什么算成功」：
 
@@ -38,10 +38,16 @@
   也就是「顶端整行注水能否流到底端」。这才是 ``p_c`` 所用的判据，它的
   ``P(p) = 1/2`` 交点才落在 ``p_c`` 上；该判据**与注水点无关**（选它时 ``inject``
   只影响单次动画的起点，不影响统计结果）。
+* ``origin`` **起点判据**：**从注水点出发的那一簇**是否纵贯（同时碰到顶行与底行）。
+  与 ``span`` 的唯一差别是「还要求注水点落在纵贯簇里」：顶端整行注水时完全等价，
+  单点注水（中心 / 随机）时交点明显更高 —— 网格上明明有纵贯簇，
+  但水从一个随机节点注入时，可能根本没落在簇里。
 * ``area`` **面积判据**：浸润节点数占总节点数的比例 ≥ ``threshold``。
   它回答的是「一次注水能浸透多大范围」，**没有固定的临界值**：交点随所设比例、
   网格尺寸、注水方式一起变化（比例越大交点越高，单点注水还会额外要求
   「起点恰好落在巨簇里」）。
+
+后两种判据的交点都**不是** ``p_c`` —— 只有 ``span`` 判据的 1/2 交点等于 ``p_c``。
 
 关于临界值
 ----------
@@ -92,19 +98,28 @@ __all__ = [
 #: 方格网键渗流的经典临界值（保留旧名，便于外部引用；对应 ``criterion="span"``）
 THEORETICAL_PC: float = 0.5
 
-#: 成功判据：``span`` = 存在纵贯簇（对应 p_c）/ ``area`` = 浸润比例达到阈值
-CRITERIA: Tuple[str, ...] = ("span", "area")
+#: 成功判据：
+#:
+#: * ``span``：整张网格是否存在纵贯簇 —— 对应 ``p_c``，**与注水方式无关**；
+#: * ``origin``：从注水点出发的那一簇是否纵贯 —— **随注水方式变化**（顶端整行时与 ``span`` 相同）；
+#: * ``area``：浸润面积达到比例阈值 —— 没有固定临界值。
+CRITERIA: Tuple[str, ...] = ("span", "origin", "area")
 
 #: 成功判据的短名（用于结果文本）
 CRITERION_NAMES: Dict[str, str] = {
     "span": "贯通判据",
+    "origin": "起点判据",
     "area": "面积判据",
 }
 
 #: 成功判据的完整说明（界面与日志用）
 CRITERION_DESCRIPTIONS: Dict[str, str] = {
-    "span": "贯通判据：整张网格存在从顶行连通到底行的纵贯簇（这就是 p_c 所对应的判据）",
-    "area": "面积判据：浸润节点占总节点的比例达到阈值（无固定临界值，随比例/尺寸/注水方式变化）",
+    "span": "贯通判据：整张网格存在从顶行连通到底行的纵贯簇"
+            "（p_c 所对应的判据，与注水方式无关）",
+    "origin": "起点判据：从注水点出发的那一簇同时碰到顶行与底行"
+              "（随注水方式变化；顶端整行注水时与贯通判据完全相同）",
+    "area": "面积判据：浸润节点占总节点的比例达到阈值"
+            "（无固定临界值，随比例/尺寸/注水方式变化）",
 }
 
 #: 默认成功判据：贯通判据（这才是 p_c 所对应的判据）
@@ -240,6 +255,10 @@ class SimResult:
     origins: List[int] = field(default_factory=list)
     #: 整张网格是否存在纵贯簇（顶行 ↔ 底行，与注水点无关）
     spans: bool = False
+    #: 从注水点出发的那一簇是否纵贯（同时碰到顶行与底行）
+    origin_spans: bool = False
+    #: 纵贯簇的节点索引（没有纵贯簇时为空列表）—— 供界面把它高亮出来
+    spanning_nodes: List[int] = field(default_factory=list)
     #: 本次「是否成功」采用的是哪种判据：``span`` / ``area``
     criterion: str = DEFAULT_CRITERION
     #: ``criterion="area"`` 时的浸润比例阈值
@@ -292,7 +311,33 @@ class SimResult:
     @property
     def success(self) -> bool:
         """按本次采用的 ``criterion`` 判定「是否成功」。"""
-        return self.spans if self.criterion == "span" else self.engulfed
+        if self.criterion == "span":
+            return self.spans
+        if self.criterion == "origin":
+            return self.origin_spans
+        return self.engulfed
+
+    @property
+    def spanning_count(self) -> int:
+        """纵贯簇的节点数。"""
+        return len(self.spanning_nodes)
+
+    @property
+    def spanning_ratio(self) -> float:
+        """纵贯簇占全部节点的比例（与浸润比例是两回事）。"""
+        return self.spanning_count / self.node_count if self.node_count else 0.0
+
+    @property
+    def origin_in_spanning(self) -> bool:
+        """注水点是否落在纵贯簇里。
+
+        这是「判定贯通、却只看见一小片浸润」的唯一原因：这次的注水点不在纵贯簇内，
+        而判据问的是整张网格有没有纵贯簇，两者互不影响。
+        """
+        if not self.origins or not self.spanning_nodes:
+            return False
+        inside = set(self.spanning_nodes)
+        return any(origin in inside for origin in self.origins)
 
 
 @dataclass
@@ -329,7 +374,8 @@ class BatchResult:
     def probability(self) -> float:
         """「成功」的发生频率（对概率的蒙特卡洛估计）。
 
-        ``criterion="span"`` 时统计的是**存在纵贯簇**的频率（交点即 ``p_c``）；
+        ``criterion="span"`` 时统计的是**整张网格存在纵贯簇**的频率（交点即 ``p_c``）；
+        ``criterion="origin"`` 时统计的是**注水点的那一簇纵贯**的频率（随注水方式变化）；
         ``criterion="area"`` 时统计的是浸润比例达到阈值的频率（无固定交点）。
         """
         return self.success / self.trials if self.trials else 0.0
@@ -407,6 +453,10 @@ class PercolationGrid:
         self.criterion = criterion
         self.threshold = _clamp(float(threshold), 0.05, 1.0)
         self.rng: random.Random = _resolve_rng(rng)
+        #: 随机注水点专用的随机源（从主随机源派生）：这样「随机注水」不会去消耗
+        #: 生成网格的那串随机数，同一颗种子下不同注水方式的网格序列完全相同，
+        #: 「贯通判据与注水方式无关」这件事才能在同一批网格上被逐次验证。
+        self._source_rng: random.Random = random.Random(self.rng.getrandbits(64))
 
         #: h_edge[r][c] 表示 (r, c) 与 (r, c+1) 之间的水平边是否流通
         self.h_edge: List[List[bool]] = []
@@ -418,8 +468,8 @@ class PercolationGrid:
         self.dr_edge: List[List[bool]] = []
         #: inject == "random" 时使用的随机注水点（随网格一起生成，便于复现）
         self._random_source: Optional[int] = None
-        #: 当前网格「是否存在纵贯簇」的缓存（None 表示尚未判定）
-        self._spanning: Optional[bool] = None
+        #: 当前网格纵贯簇的节点清单缓存（None 表示尚未判定，空列表表示没有纵贯簇）
+        self._spanning_nodes: Optional[List[int]] = None
         self.regenerate()
 
     # ------------------------------------------------------------------
@@ -478,7 +528,10 @@ class PercolationGrid:
 
     @property
     def pc_label(self) -> str:
-        """临界值的展示文本（随判据变化：面积判据下没有固定阈值）。"""
+        """临界值的展示文本（随判据变化：只有贯通判据对应 p_c）。"""
+        if self.criterion == "origin":
+            return ("起点判据没有固定临界值：交点还要求「注水点落在纵贯簇里」，"
+                    "所以高于 p_c；注水方式为顶端整行时与贯通判据相同。")
         if not self.pc_applies:
             return ("面积判据没有固定临界值：交点随所设比例、网格尺寸、注水方式变化，"
                     "只有贯通判据才对应 p_c。")
@@ -510,6 +563,8 @@ class PercolationGrid:
             self.p = _clamp(float(p), 0.0, 1.0)
         if seed is not None:
             self.rng = random.Random(seed)
+            # 主随机源换了，随注水点的随机源也要跟着换，种子才真正可复现
+            self._source_rng = random.Random(self.rng.getrandbits(64))
 
         rows, cols, prob, rnd = self.rows, self.cols, self.p, self.rng.random
         self.h_edge = [[rnd() < prob for _ in range(cols - 1)] for _ in range(rows)]
@@ -536,8 +591,10 @@ class PercolationGrid:
             self.dr_edge = dr_rows
 
         if self.inject == "random":
-            self._random_source = self.rng.randrange(self.node_count)
-        self._spanning = None               # 网格换了，贯通判定缓存作废
+            # 延迟到取用时再挑（与点渗流一致）：这样「随机注水」不会额外消耗随机数，
+            # 同一颗种子下不同注水方式生成的网格序列完全相同，便于横向比较。
+            self._random_source = None
+        self._spanning_nodes = None         # 网格换了，贯通判定缓存作废
         return self
 
     def total_edge_count(self) -> int:
@@ -672,6 +729,21 @@ class PercolationGrid:
             if self.direction_allows(dr, dc):
                 yield nb
 
+    def traversable_neighbors(self, index: int) -> Iterator[int]:
+        """沿流通边、且**沿允许方向至少一个方向能走**的邻居（给「已走过的边」上色用）。
+
+        与 :meth:`neighbors` 的区别：``neighbors`` 只给出「从 ``index`` 出发能走到的
+        邻居」（出边，受方向限制）。给已经走过的边染色时必须两个方向都看：后一步才被
+        浸润的节点，从它看前一步的邻居可能是「逆着方向」的，只看 ``neighbors`` 就会
+        漏色 —— 有向模式 + 三角网时尤其明显（每个节点有两条斜向上的入边都拿不到颜色）。
+
+        两个端点都已浸润、且这条边沿允许方向能走，它就属于水漫过的区域；
+        至于水实际是从哪头流过来的，不影响上色判断。
+        """
+        for nb, dr, dc in self._candidate_neighbors(index):
+            if self.direction_allows(dr, dc) or self.direction_allows(-dr, -dc):
+                yield nb
+
     # ------------------------------------------------------------------
     # 注水点与出口
     # ------------------------------------------------------------------
@@ -682,7 +754,7 @@ class PercolationGrid:
             return [(rows // 2) * cols + cols // 2]
         if self.inject == "random":
             if self._random_source is None:
-                self._random_source = self.rng.randrange(self.node_count)
+                self._random_source = self._source_rng.randrange(self.node_count)
             return [self._random_source]
         return list(range(cols))
 
@@ -698,26 +770,56 @@ class PercolationGrid:
     # ------------------------------------------------------------------
     # 贯通判定（criterion == "span"）
     # ------------------------------------------------------------------
-    def has_spanning_cluster(self) -> bool:
-        """整张网格是否存在**纵贯簇**（同时连通顶行与底行的连通簇）。
+    def spanning_nodes(self) -> List[int]:
+        """纵贯簇的节点清单（同时连通顶行与底行的那个连通簇）；没有则返回空列表。
 
-        这就是 ``p_c`` 所对应的判据：水从顶行整行出发，能否沿流通边到达底行。
-        判定结果会在同一张网格上缓存，重新生成网格后失效。
+        这就是 ``p_c`` 所对应的判据所关注的那个簇：判据只问「有没有」，而界面需要
+        把**到底是哪一个簇**纵贯画出来 —— 否则很容易把「浸润面积」误当成判据的判据
+        （一次单点注水可以只浸透一小片，但它和「网格上有没有纵贯簇」是两件事）。
 
         **与注水点无关**：``inject`` 只决定单次动画从哪儿开始；判据问的是
-        「整张网格有没有纵贯的水路」。（当 ``inject == "top"`` 时，它与
+        「整张网格有没有纵贯簇」。（当 ``inject == "top"`` 时，它与
         ``percolates()`` 完全等价。）
-        """
-        if self._spanning is None:
-            self._spanning = self._scan_span()
-        return self._spanning
 
-    def _scan_span(self) -> bool:
-        """顶行整行 → 底行的连通性判定（无向走并查集，其余方向模式走 BFS）。"""
-        top = self.top_row_nodes()
-        if self.direction == "undirected":
-            return self._percolates_uf(top)
-        return self._percolates_bfs(top)
+        结果在同一张网格上缓存，重新生成网格后失效。
+        """
+        if self._spanning_nodes is None:
+            self._spanning_nodes = self._scan_span()
+        return self._spanning_nodes
+
+    def has_spanning_cluster(self) -> bool:
+        """整张网格是否存在**纵贯簇**（等价于 :meth:`spanning_nodes` 非空）。"""
+        return bool(self.spanning_nodes())
+
+    def _scan_span(self) -> List[int]:
+        """逐簇 BFS：从顶行每个节点出发，返回**第一个**纵贯（顶行 ↔ 底行）的簇。
+
+        分成一个个簇来试，而不是把顶行整行一次连通：这样能精确指出是哪个簇纵贯，
+        界面才能把它单独高亮（一次大 BFS 会把互不相连的簇混在一起）。
+        方向模式照常生效，所以有向模式得到的是「有向纵贯簇」。
+        """
+        rows = self.rows
+        last_row_start = (rows - 1) * self.cols
+        seen = bytearray(self.node_count)
+        for start in self.top_row_nodes():
+            if seen[start]:
+                continue
+            members: List[int] = []
+            queue: deque = deque([start])
+            seen[start] = 1
+            reaches_bottom = False
+            while queue:
+                idx = queue.popleft()
+                members.append(idx)
+                if idx >= last_row_start:
+                    reaches_bottom = True
+                for nb in self.neighbors(idx):
+                    if not seen[nb]:
+                        seen[nb] = 1
+                        queue.append(nb)
+            if reaches_bottom:
+                return members          # 这一簇从顶行连到了底行，就是纵贯簇
+        return []
 
     # ------------------------------------------------------------------
     # 渗流判定
@@ -759,6 +861,8 @@ class PercolationGrid:
                     dist[nb] = nd
                     queue.append(nb)
 
+        spanning = self.spanning_nodes()
+        touches_top = any(idx < cols for idx in dist)
         return SimResult(
             rows=rows,
             cols=cols,
@@ -767,7 +871,9 @@ class PercolationGrid:
             wet=list(dist.keys()),
             layers=layers,
             origins=source,
-            spans=self.has_spanning_cluster(),
+            spans=bool(spanning),
+            origin_spans=touches_top and percolates,
+            spanning_nodes=spanning,
             criterion=self.criterion,
             threshold=self.threshold,
             open_edge_count=self.open_edge_count(),
@@ -775,23 +881,58 @@ class PercolationGrid:
             elapsed=time.perf_counter() - started,
         )
 
-    def wet_size(self, origins: Optional[Sequence[int]] = None) -> int:
-        """只统计浸润节点数（面积判据与批量统计的高速路径，不记录分层）。"""
+    def spread_stats(self, origins: Optional[Sequence[int]] = None) -> Tuple[int, bool, bool]:
+        """一次 BFS 同时得到：(浸润节点数, 是否碰到顶行, 是否碰到底行)。
+
+        「面积判据」要的是第一项，「起点判据」要的是后两项，批量统计因此只需跑一遍。
+        """
+        rows = self.rows
+        last_row_start = (rows - 1) * self.cols
+        source = self.source_nodes() if origins is None else origins
         seen = bytearray(self.node_count)
         queue: deque = deque()
-        for idx in (self.source_nodes() if origins is None else origins):
+        for idx in source:
             if not seen[idx]:
                 seen[idx] = 1
                 queue.append(idx)
+
         count = 0
+        touches_top = False
+        touches_bottom = False
         while queue:
             idx = queue.popleft()
             count += 1
+            if idx < self.cols:
+                touches_top = True
+            if idx >= last_row_start:
+                touches_bottom = True
             for nb in self.neighbors(idx):
                 if not seen[nb]:
                     seen[nb] = 1
                     queue.append(nb)
-        return count
+        return count, touches_top, touches_bottom
+
+    def spread_size(self, origins: Optional[Sequence[int]] = None) -> int:
+        """只统计浸润节点数（面积判据与批量统计的高速路径，不记录分层）。
+
+        与点渗流的 ``spread_size`` 同名同义，方便两个模型交叉对照；
+        本模型的惯用词是「浸润」，所以 :meth:`wet_size` 是它的别名。
+        """
+        return self.spread_stats(origins)[0]
+
+    def wet_size(self, origins: Optional[Sequence[int]] = None) -> int:
+        """浸润节点数（本模型惯用词，等价于 :meth:`spread_size`）。"""
+        return self.spread_size(origins)
+
+    def origin_spans(self, origins: Optional[Sequence[int]] = None) -> bool:
+        """从注水点出发的那一簇是否**纵贯**（同时碰到顶行与底行）。
+
+        与 :meth:`has_spanning_cluster` 的区别：那个问「整张网格有没有纵贯簇」，
+        这个问「这次注水的那一簇是不是纵贯的」。顶端整行注水时两者等价；
+        单点注水额外要求起点落在纵贯簇里，所以概率更低。
+        """
+        _count, touches_top, touches_bottom = self.spread_stats(origins)
+        return touches_top and touches_bottom
 
     def _percolates_uf(self, sources: Sequence[int]) -> bool:
         """并查集判定：给定的注水点集合能否连通到底端整行（仅无向模式有效）。"""
@@ -896,6 +1037,8 @@ def batch_percolation_probability(
 
     * ``criterion="span"``：这张网格上**存在纵贯簇**（顶行 ↔ 底行）。
       交点即 ``p_c``，且**与注水方式无关**（判据问的是整张网格的性质）；
+    * ``criterion="origin"``：按 ``inject`` 挑注水点出发，这一簇是否**纵贯**
+      （同时碰到顶行与底行）。顶端整行时与 ``span`` 等价，单点注水时交点高于 ``p_c``；
     * ``criterion="area"``：按 ``inject`` 挑注水点出发，浸润节点比例 ≥ ``threshold``。
       交点随比例 / 尺寸 / 注水方式漂移，不是 ``p_c``。
 
@@ -916,6 +1059,7 @@ def batch_percolation_probability(
     )
     step = max(1, trials // 50)   # 进度回调频率：最多约 50 次
     span_criterion = criterion == "span"
+    origin_criterion = criterion == "origin"
     node_count = grid.node_count
     success = 0
     ratio_sum = 0.0
@@ -925,13 +1069,20 @@ def batch_percolation_probability(
     for i in range(1, trials + 1):
         grid.regenerate()
         if span_criterion:
-            # 贯通判据：整张网格是否存在纵贯水路（与注水点无关）
+            # 贯通判据：整张网格是否存在纵贯簇（与注水点无关）
             ok = grid.has_spanning_cluster()
+            ratio_sum += grid.wet_size() / node_count if node_count else 0.0
         else:
-            ok = (grid.wet_size() / node_count) >= grid.threshold if node_count else False
+            # 起点判据 / 面积判据都要先注水一次：一遍 BFS 同时得到两者所需的量
+            count, touches_top, touches_bottom = grid.spread_stats()
+            ratio = count / node_count if node_count else 0.0
+            ratio_sum += ratio
+            if origin_criterion:
+                ok = touches_top and touches_bottom
+            else:
+                ok = ratio >= grid.threshold
         if ok:
             success += 1
-        ratio_sum += grid.wet_size() / node_count if node_count else 0.0
         done = i
         if progress is not None and (i % step == 0 or i == trials):
             progress(i, trials, success)
@@ -1086,7 +1237,8 @@ if __name__ == "__main__":
         print(f"{threshold:>8.0%} | " + " | ".join(cells))
     print("-" * 78)
 
-    print("注水方式对照（方格网 32×32，p = 0.5，各 300 次）")
+    print("自检 3：三种判据 × 三种注水方式（方格网 32×32，p = 0.5，各 300 次）")
+    print("关键差别：贯通判据问「网格上有没有纵贯簇」，起点判据问「你这一注水纵贯吗」。")
     for criterion in CRITERIA:
         for inject in INJECT_MODES:
             res = batch_percolation_probability(
@@ -1096,5 +1248,20 @@ if __name__ == "__main__":
             print(f"  [{res.criterion_name}] {INJECT_NAMES[inject]:<8}"
                   f" P = {res.probability:.3f}   平均浸润比例 = {res.mean_ratio:.3f}")
         print("-" * 78)
-    print("提示：贯通判据下注水方式完全不影响结果（判据问的是整张网格的性质），")
-    print("      面积判据下注水方式影响很大 —— 单点注水额外要求「起点落在巨簇里」。")
+
+    probe = PercolationGrid(rows=32, p=0.5, rng=shared_rng, inject="random")
+    span_ok = 0
+    origin_in = 0
+    for _ in range(300):
+        probe.regenerate()
+        if probe.has_spanning_cluster():
+            span_ok += 1
+            if probe.origin_spans():
+                origin_in += 1
+    if span_ok:
+        print(f"同一批网格：存在纵贯簇 {span_ok}/300，其中随机注水点恰好落在簇里 "
+              f"{origin_in} 次（{origin_in / span_ok:.1%}）")
+        print("—— 这就是「起点判据」比「贯通判据」低的原因：注水点可能落在簇外。")
+    print("-" * 78)
+    print("提示：贯通判据下注水方式完全不影响结果（判据问的是整张网格的性质）；")
+    print("      起点判据 / 面积判据下影响很大 —— 单点注水额外要求「起点落在纵贯簇里」。")

@@ -68,9 +68,11 @@ PARAMS = (
         key="criterion", label="成功判据", kind="choice",
         default="贯通判据：顶行连通到底行（对应 p_c）",
         choices=tuple(CRITERION_CHOICES), group="高级选项",
-        hint="两种判据回答的是两个不同的问题：\n"
+        hint="三种判据回答的是三个不同的问题：\n"
              "· 贯通判据：整张网格是否存在顶行↔底行的纵贯簇 —— 这才是 p_c 的判据，"
              "与注水方式无关；\n"
+             "· 起点判据：从注水点出发的那一簇是否纵贯 —— 随注水方式变化，"
+             "顶端整行时与贯通判据相同；\n"
              "· 面积判据：浸润面积达到设定比例 —— 没有固定临界值，交点随比例、网格尺寸、"
              "注水方式一起变。",
     ),
@@ -203,6 +205,12 @@ def _handle_generate(params: Dict[str, Any], payload: Dict[str, Any]) -> Dict[st
         "percolates": result.percolates,
         # 整张网格是否存在纵贯簇（与注水点无关，贯通判据就看这个）
         "spans": result.spans,
+        # 从注水点出发的簇是否纵贯（起点判据看这个）
+        "originSpans": result.origin_spans,
+        "spanningCount": result.spanning_count,
+        "spanningRatio": result.spanning_ratio,
+        "spanningNodes": result.spanning_nodes,
+        "originInSpanning": result.origin_in_spanning,
         "success": result.success,
         "engulfed": result.engulfed,
         "nodeCount": result.node_count,
@@ -312,10 +320,15 @@ def _cli(args) -> int:
                "criterion": criterion, "threshold": threshold}
     shape = f"{rows}×{cols}" if rows != cols else f"{rows}×{rows}"
     grid = PercolationGrid(rows=rows, cols=cols, p=p, **options)
+    # 判据名称由下一行的 rule 给出，这里只放临界值说明，避免「判据：… | 判据：…」重复
     header = (f"{grid.lattice_name} {shape} | {grid.direction_name} | "
-              f"注水：{grid.inject_name} | 判据：{grid.criterion_name} | {grid.pc_label}")
-    rule = ("贯通判据：整张网格是否存在纵贯簇" if criterion == "span"
-            else f"面积判据：浸润比例 ≥ {threshold:.0%}")
+              f"注水：{grid.inject_name} | {grid.pc_label}")
+    if criterion == "span":
+        rule = "贯通判据：整张网格是否存在纵贯簇"
+    elif criterion == "origin":
+        rule = "起点判据：从注水点出发的簇是否纵贯顶底"
+    else:
+        rule = f"面积判据：浸润比例 ≥ {threshold:.0%}"
 
     if getattr(args, "scan", False):
         step = float(getattr(args, "step", 0.05))
@@ -345,7 +358,10 @@ def _cli(args) -> int:
                    progress=on_point, **options)
         print("-" * 78)
         if criterion == "span":
-            print("提示：成功概率 = 1/2 的交点即临界值 p_c（p 越过它，水路贯通 —— 相变）。")
+            print("提示：成功概率 = 1/2 的交点即临界值 p_c（p 越过它，纵贯簇出现 —— 相变）。")
+        elif criterion == "origin":
+            print("提示：起点判据的交点高于 p_c —— 它额外要求「注水点落在纵贯簇里」；")
+            print("      注水方式选「顶端整行」时它与贯通判据完全相同。")
         else:
             print("提示：面积判据的交点不是固定临界值，它随所设比例、网格尺寸、注水方式变化；")
             print("      只有「贯通判据」的交点才等于 p_c。")
@@ -360,14 +376,21 @@ def _cli(args) -> int:
           f"（实测比例 {single.open_ratio:.3f}）| {rule}")
     print(f"浸润节点 {single.wet_count}/{single.node_count}（{single.wet_ratio:.1%}），"
           f"蔓延 {single.depth} 层")
+    bottom = "已到达底端" if single.percolates else "未到达底端"
     if criterion == "span":
         verdict = "存在纵贯簇 ✔" if single.spans else "没有纵贯簇 ✘"
-        print(f"整张网格是否存在纵贯簇（顶行 ↔ 底行）：{verdict}；"
-              f"本次注水{'已到达底端' if single.percolates else '未到达底端'}。")
+        print(f"整张网格是否存在纵贯簇（顶行 ↔ 底行）：{verdict}"
+              f"（纵贯簇 {single.spanning_count} 节点，{single.spanning_ratio:.1%}）；"
+              f"本次注水{bottom}。")
+    elif criterion == "origin":
+        verdict = "纵贯 ✔" if single.origin_spans else "未纵贯 ✘"
+        note = "" if single.spans else "（网格上本来就没有纵贯簇）"
+        inside = "在簇内" if single.origin_in_spanning else "在簇外"
+        print(f"从注水点出发的那一簇是否纵贯顶行与底行：{verdict}{note}；"
+              f"注水点{inside}；本次注水{bottom}。")
     else:
         verdict = f"达到 ≥{threshold:.0%} ✔" if single.engulfed else f"不足 {threshold:.0%} ✘"
-        print(f"本次浸润比例 {single.wet_ratio:.1%}，{verdict}；"
-              f"本次注水{'已到达底端' if single.percolates else '未到达底端'}。")
+        print(f"本次浸润比例 {single.wet_ratio:.1%}，{verdict}；本次注水{bottom}。")
 
     res = batch_percolation_probability(
         rows=rows, cols=cols, p=p, trials=trials,
@@ -389,19 +412,24 @@ def build_spec() -> ModelSpec:
         name="边渗流模型",
         topic="量变引起质变",
         summary="每条边以概率 p 随机连通，看水能否从注水点渗到底端；"
-                "支持方格网/三角网、方形/矩形网格、四种方向模式、三种注水方式与两种成功判据。",
+                "支持方格网/三角网、方形/矩形网格、四种方向模式、三种注水方式与三种成功判据。",
         description=(
             "在 rows × cols 的格子上，每条边以概率 p 独立地设为「流通」或「阻断」，"
             "水从注水点出发沿流通边蔓延。\n\n"
-            "**先分清两种「成功」的标准，它们的临界值完全不是一回事：**\n\n"
+            "**先分清三种「成功」的标准，它们的临界值完全不是一回事：**\n\n"
             "1. 贯通判据（默认）：整张网格上是否存在从顶行连通到底行的**纵贯簇**，"
             "也就是「顶端整行注水能否流到底端」。方格网（4 邻域）无向键渗流 p_c = 1/2、"
             "三角网（6 邻域）p_c = 2·sin(π/18) ≈ 0.3473、只允许向下/向右的经典有向渗流"
             "p_c ≈ 0.6447（文献值），说的都是这个相变，所以它的「成功概率 = 1/2」交点"
             "落在 p_c 上，且与注水方式无关。\n\n"
-            "2. 面积判据：从注水点出发的浸润面积达到设定比例。它回答的是「一次注水能浸透"
+            "2. 起点判据：**从注水点出发的那一簇**是否纵贯（同时碰到顶行与底行）。"
+            "它与贯通判据的唯一差别是「还要求注水点落在纵贯簇里」：顶端整行注水时两者"
+            "完全相同，中心 / 随机单点注水时交点明显更高 —— 网格上明明有纵贯簇，"
+            "水从一个随机节点注入却可能根本没接上，只浸透一小片。\n\n"
+            "3. 面积判据：从注水点出发的浸润面积达到设定比例。它回答的是「一次注水能浸透"
             "多大范围」，**没有固定的临界值**：比例定得越大交点越高，单点注水还会额外要求"
-            "「起点恰好落在巨簇里」，网格尺寸也会影响它。把这条曲线的交点当成 p_c 是常见误解。\n\n"
+            "「起点恰好落在巨簇里」，网格尺寸也会影响它。\n\n"
+            "后两种判据的交点都**不是** p_c（把它们的交点当成 p_c 是常见误解）。"
             "另外：p_c 只取决于格子的连接结构与方向模式，与网格是正方形还是矩形、"
             "以及注水点在顶端整行、中心还是随机位置都无关 —— 后两者只改变有限尺寸下"
             "曲线的形状与陡峭程度（矩形网格与单点注水的曲线更缓、饱和更慢）。"
@@ -414,7 +442,7 @@ def build_spec() -> ModelSpec:
         icon="≋",
         handler=handle,
         cli=_cli,
-        highlights=("两种成功判据：贯通（对 p_c）与面积（无固定阈值）",
+        highlights=("三种成功判据：贯通（对 p_c）/ 起点纵贯（随注水方式）/ 面积比例",
                     "方格网 0.5 / 三角网 0.3473 / 有向 0.6447",
                     "矩形网格 + 四种方向模式 + 三种注水方式"),
         order=10,          # 同主题内先展示边渗流，再展示点渗流

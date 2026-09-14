@@ -86,8 +86,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="方向模式：无向 / 不允许向上 / 只允许向下向右 / 只允许向下向左")
     model.add_argument("--inject", choices=("top", "center", "random"), default=None,
                        help="注水（起始）方式：顶端整行 / 中心 / 随机单点；省略则用模型默认值")
-    model.add_argument("--criterion", choices=("span", "area"), default=None,
-                       help="成功判据：span = 存在纵贯簇（对应 p_c，默认）；"
+    model.add_argument("--criterion", choices=("span", "origin", "area"), default=None,
+                       help="成功判据：span = 整片网格存在纵贯簇（对应 p_c，默认）；"
+                            "origin = 注水点出发的那一簇是否纵贯（随注水方式变化）；"
                             "area = 面积比例达到阈值（无固定临界值）")
     model.add_argument("--threshold", choices=("0.3", "0.5", "0.7", "0.9"), default=None,
                        help="（判据 = area 时）面积判据的比例阈值，默认 0.5")

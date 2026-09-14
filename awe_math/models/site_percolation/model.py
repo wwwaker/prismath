@@ -19,20 +19,27 @@
 * **注水点** ``inject``：``random``（随机一个占据格）/ ``center``（中心附近）/ ``top``（顶端整行）；
 * **成功判据** ``criterion``：``span``（贯通）/ ``area``（面积），见下。
 
-两种成功判据（务必区分）
+三种成功判据（务必区分）
 ------------------------
 ``p_c ≈ 0.5927`` 说的是「出现无限大簇 / 纵贯簇」的相变，**不是**「蔓延面积达到某个比例」。
 因此本模块把「什么算成功」显式抽成一个维度：
 
-* ``span`` **贯通判据**（默认）：格地上**是否存在纵贯簇**，即是否有一个占据簇同时连通
-  顶行与底行。这正是文献里 ``p_c`` 所用的判据，所以它的 ``P(p) = 1/2`` 交点才落在
+* ``span`` **贯通判据**（默认）：整片格地上**是否存在纵贯簇**，即是否有一个占据簇同时
+  连通顶行与底行。这正是文献里 ``p_c`` 所用的判据，所以它的 ``P(p) = 1/2`` 交点才落在
   ``p_c`` 上。该判据**与注水点无关**（等价于「顶端整行注水，水能否到达底行」）；
   选它时 ``inject`` 只影响单次动画的起点，不影响统计结果。
+* ``origin`` **起点判据**：**从注水点出发的那一簇**是否纵贯（同时碰到顶行与底行）。
+  它与 ``span`` 的唯一差别是「还要求注水点落在那条纵贯簇里」：顶端整行注水时两者
+  完全等价；随机 / 中心单点注水时交点会明显高于 ``p_c``（格地上明明有纵贯簇，
+  一次随机起火却可能有相当一部分概率**落在簇外**，于是火很小）。
+  这正是「一次偶然的起火能不能烧穿整片格地」。
 * ``area`` **面积判据**：从注水点出发的蔓延簇占整片格地的比例 ≥ ``threshold``。
   它回答的是「随机一棵树起火最终烧掉多大面积」，**没有固定的临界密度**：
   ``P(p) = 1/2`` 的交点随**所设比例、网格尺寸、注水方式**一起变化——
   比例定得越大交点越高，单点注水还会额外要求「起点恰好落在巨簇里」。
   只有把比例取得很小、网格取得很大时，它才会缓慢地往 ``p_c`` 靠拢。
+
+注意：后两种判据的交点都**不是** ``p_c`` —— 只有 ``span`` 判据的 1/2 交点等于 ``p_c``。
 
 关于临界值
 ----------
@@ -59,6 +66,7 @@ __all__ = [
     "DEFAULT_THRESHOLD",
     "CRITERIA",
     "CRITERION_NAMES",
+    "CRITERION_DESCRIPTIONS",
     "DEFAULT_CRITERION",
     "DIRECTIONS",
     "DIRECTION_NAMES",
@@ -80,12 +88,17 @@ THEORETICAL_PC: float = 0.592746
 #: 默认的面积判据阈值（``criterion="area"`` 时蔓延格数占总格数的比例）
 DEFAULT_THRESHOLD: float = 0.5
 
-#: 成功判据：``span`` = 存在纵贯簇（对应 p_c）/ ``area`` = 蔓延面积达到比例阈值
-CRITERIA: Tuple[str, ...] = ("span", "area")
+#: 成功判据：
+#:
+#: * ``span``：整片格地是否存在纵贯簇 —— 对应 ``p_c``，**与注水方式无关**；
+#: * ``origin``：从注水点出发的那一簇是否纵贯 —— **随注水方式变化**（顶端整行时与 ``span`` 相同）；
+#: * ``area``：蔓延面积达到比例阈值 —— 没有固定临界值。
+CRITERIA: Tuple[str, ...] = ("span", "origin", "area")
 
 #: 成功判据的短名（用于结果文本）
 CRITERION_NAMES: Dict[str, str] = {
     "span": "贯通判据",
+    "origin": "起点判据",
     "area": "面积判据",
 }
 
@@ -142,7 +155,9 @@ INJECT_NAMES: Dict[str, str] = {
 
 #: 成功判据的完整说明（界面与日志用）
 CRITERION_DESCRIPTIONS: Dict[str, str] = {
-    "span": "贯通判据：格地上存在从顶行连通到底行的纵贯簇（这就是 p_c 所对应的判据）",
+    "span": "贯通判据：整片格地存在从顶行连通到底行的纵贯簇（p_c 所对应的判据，与注水方式无关）",
+    "origin": "起点判据：从注水点出发的蔓延簇同时碰到顶行与底行（随注水方式变化；"
+              "顶端整行注水时与贯通判据完全相同）",
     "area": "面积判据：蔓延簇占整片格地的比例达到阈值（无固定临界值，随比例/尺寸/注水方式变化）",
 }
 
@@ -189,6 +204,10 @@ class SpreadResult:
     reached_bottom: bool = False
     #: 整片格地上是否存在纵贯簇（顶行 ↔ 底行，与注水点无关）
     spans: bool = False
+    #: 从注水点出发的蔓延簇是否纵贯（同时碰到顶行与底行）
+    origin_spans: bool = False
+    #: 纵贯簇的格子索引（没有纵贯簇时为空列表）—— 供界面把它高亮出来
+    spanning_nodes: List[int] = field(default_factory=list)
     elapsed: float = 0.0
 
     @property
@@ -241,11 +260,37 @@ class SpreadResult:
     @property
     def success(self) -> bool:
         """按本次采用的 ``criterion`` 判定「是否成功」。"""
-        return self.spans if self.criterion == "span" else self.engulfed
+        if self.criterion == "span":
+            return self.spans
+        if self.criterion == "origin":
+            return self.origin_spans
+        return self.engulfed
 
     @property
     def criterion_name(self) -> str:
         return CRITERION_NAMES.get(self.criterion, self.criterion)
+
+    @property
+    def spanning_count(self) -> int:
+        """纵贯簇的格子数。"""
+        return len(self.spanning_nodes)
+
+    @property
+    def spanning_ratio(self) -> float:
+        """纵贯簇占整片格地的比例（与蔓延比例是两回事）。"""
+        return self.spanning_count / self.node_count if self.node_count else 0.0
+
+    @property
+    def origin_in_spanning(self) -> bool:
+        """注水点是否落在纵贯簇里。
+
+        这是「判定贯通、却只看见一小片蔓延」的唯一原因：这次的火源不在纵贯簇内，
+        而判据问的是整片格地有没有纵贯簇，两者互不影响。
+        """
+        if not self.origins or not self.spanning_nodes:
+            return False
+        inside = set(self.spanning_nodes)
+        return any(origin in inside for origin in self.origins)
 
 
 @dataclass
@@ -282,7 +327,8 @@ class SpreadBatchResult:
     def probability(self) -> float:
         """「成功」的发生频率（对概率的蒙特卡洛估计）。
 
-        ``criterion="span"`` 时统计的是**存在纵贯簇**的频率（交点即 ``p_c``）；
+        ``criterion="span"`` 时统计的是**整片格地存在纵贯簇**的频率（交点即 ``p_c``）；
+        ``criterion="origin"`` 时统计的是**注水点的簇纵贯**的频率（随注水方式变化）；
         ``criterion="area"`` 时统计的是蔓延比例达到阈值的频率（无固定交点）。
         """
         return self.success / self.trials if self.trials else 0.0
@@ -360,12 +406,16 @@ class SitePercolation:
         self.criterion = criterion
         self.threshold = _clamp(float(threshold), 0.05, 1.0)
         self.rng: random.Random = _resolve_rng(rng)
+        #: 随机注水点专用的随机源（从主随机源派生）：这样「随机注水」不会去消耗
+        #: 生成格地的那串随机数，同一颗种子下不同注水方式的格地序列完全相同，
+        #: 「贯通判据与注水方式无关」这件事才能在同一批格地上被逐次验证。
+        self._source_rng: random.Random = random.Random(self.rng.getrandbits(64))
         #: occupied[r][c] 表示该格是否被占据
         self.occupied: List[List[bool]] = []
         #: inject == "random" 时使用的随机注水点（随格地一起生成，便于复现）
         self._random_source: Optional[int] = None
-        #: 当前格地「是否存在纵贯簇」的缓存（None 表示尚未判定）
-        self._spanned: Optional[bool] = None
+        #: 当前格地纵贯簇的格子清单缓存（None 表示尚未判定，空列表表示没有纵贯簇）
+        self._spanning_nodes: Optional[List[int]] = None
         self.regenerate()
 
     # ------------------------------------------------------------------
@@ -424,7 +474,10 @@ class SitePercolation:
 
     @property
     def pc_label(self) -> str:
-        """临界值的展示文本（随判据变化：面积判据下没有固定阈值）。"""
+        """临界值的展示文本（随判据变化：只有贯通判据对应 p_c）。"""
+        if self.criterion == "origin":
+            return ("起点判据没有固定临界值：交点还要求「注水点落在纵贯簇里」，"
+                    "所以高于 p_c；注水方式为顶端整行时与贯通判据相同。")
         if not self.pc_applies:
             return ("面积判据没有固定临界值：交点随所设比例、网格尺寸、注水方式变化，"
                     "只有贯通判据才对应 p_c。")
@@ -456,13 +509,15 @@ class SitePercolation:
             self.p = _clamp(float(p), 0.0, 1.0)
         if seed is not None:
             self.rng = random.Random(seed)
+            # 主随机源换了，随注水点的随机源也要跟着换，种子才真正可复现
+            self._source_rng = random.Random(self.rng.getrandbits(64))
 
         rows, cols, prob, rnd = self.rows, self.cols, self.p, self.rng.random
         self.occupied = [[rnd() < prob for _ in range(cols)] for _ in range(rows)]
 
         if self.inject == "random":
             self._random_source = None      # 延迟到取用时再挑，避免空位过多时的浪费
-        self._spanned = None                # 格地换了，贯通判定缓存作废
+        self._spanning_nodes = None         # 格地换了，贯通判定缓存作废
         return self
 
     def is_occupied(self, index: int) -> bool:
@@ -534,6 +589,21 @@ class SitePercolation:
             if self.direction_allows(dr, dc) and self.occupied[nb // self.cols][nb % self.cols]:
                 yield nb
 
+    def traversable_neighbors(self, index: int) -> Iterator[int]:
+        """相邻、被占据、且**沿允许方向至少一个方向能蔓延**的邻居（给「已走过的边」上色用）。
+
+        与 :meth:`neighbors` 的区别：``neighbors`` 只给出「从 ``index`` 出发能蔓延到的
+        邻居」（受方向限制）。给已经烧过的连接染色时必须两个方向都看：后一步才被蔓延到的
+        格子，从它看前一步的邻居可能是「逆着方向」的，只看 ``neighbors`` 就会漏色 ——
+        有向模式 + 三角网时尤其明显（每个格子有两条斜向上的入边都拿不到颜色）。
+        """
+        cols = self.cols
+        for nb, dr, dc in self._adjacent(index):
+            if not self.occupied[nb // cols][nb % cols]:
+                continue
+            if self.direction_allows(dr, dc) or self.direction_allows(-dr, -dc):
+                yield nb
+
     # ------------------------------------------------------------------
     # 注水点
     # ------------------------------------------------------------------
@@ -551,7 +621,7 @@ class SitePercolation:
             total = self.occupied_count()
             if total <= 0:
                 return []
-            target = self.rng.randrange(total)
+            target = self._source_rng.randrange(total)
             for rank, index in enumerate(self.iter_occupied()):
                 if rank == target:
                     self._random_source = index
@@ -559,6 +629,27 @@ class SitePercolation:
         if self._random_source is None or not self.is_occupied(self._random_source):
             return []
         return [self._random_source]
+
+    def top_row_nodes(self) -> List[int]:
+        """顶端整行里被占据的格子（纵贯判据的入口，与 ``inject`` 无关）。"""
+        return [c for c in range(self.cols) if self.occupied[0][c]]
+
+    def bottom_row_nodes(self) -> List[int]:
+        """底端整行里被占据的格子（纵贯判据的出口）。"""
+        row = self.rows - 1
+        return [row * self.cols + c for c in range(self.cols) if self.occupied[row][c]]
+
+    def sink_nodes(self) -> List[int]:
+        """出口：底端整行里被占据的格子（与边渗流的 ``sink_nodes()`` 同名同义）。"""
+        return self.bottom_row_nodes()
+
+    def percolates(self, origins: Optional[Sequence[int]] = None) -> bool:
+        """水能否从注水点到达**底端整行**。
+
+        与 :meth:`origin_spans` 的区别：这个只要求碰到底行，那个还要求碰到顶行。
+        （对应边渗流的 ``percolates()``，便于两个模型交叉对照。）
+        """
+        return self.spread_stats(origins)[2]
 
     def _nearest_to_center(self) -> int:
         """离格地中心最近的占据格（按平方距离，平局取行优先靠前者）。"""
@@ -575,43 +666,59 @@ class SitePercolation:
     # ------------------------------------------------------------------
     # 贯通判定（criterion == "span"）
     # ------------------------------------------------------------------
-    def has_spanning_cluster(self) -> bool:
-        """格地上是否存在**纵贯簇**（同时连通顶行与底行的占据簇）。
+    def spanning_nodes(self) -> List[int]:
+        """纵贯簇的格子清单（同时连通顶行与底行的那个簇）；没有则返回空列表。
 
-        这就是 ``p_c`` 所对应的判据：从顶行的每个占据格出发，看能否沿可蔓延关系
-        到达底行。判定结果会在同一个格地上缓存，重新生成格地后失效。
+        这就是 ``p_c`` 所对应的判据所关注的那个簇：判据只问「有没有」，而界面需要
+        把**到底是哪一片格子**纵贯画出来 —— 否则很容易把「蔓延面积」误当成判据的判据
+        （一次随机注水的火可以很小，但它和「格地上有没有纵贯簇」是两件事）。
 
         **与注水点无关**：``inject`` 只决定单次动画从哪儿开始；判据问的是
         「整片格地有没有纵贯簇」，所以统计时不受注水方式影响。
         （当 ``inject == "top"`` 时，它与「水从顶端整行到达底行」完全等价。）
+
+        结果在同一个格地上缓存，重新生成格地后失效。
         """
-        if self._spanned is None:
-            self._spanned = self._scan_span()
-        return self._spanned
+        if self._spanning_nodes is None:
+            self._spanning_nodes = self._scan_span()
+        return self._spanning_nodes
 
-    def _scan_span(self) -> bool:
-        """自上而下的 BFS：顶行占据格能否到达底行（方向模式照常生效）。"""
-        rows, cols = self.rows, self.cols
-        if not any(self.occupied[0]) or not any(self.occupied[rows - 1]):
-            return False
+    def has_spanning_cluster(self) -> bool:
+        """格地上是否存在**纵贯簇**（等价于 :meth:`spanning_nodes` 非空）。"""
+        return bool(self.spanning_nodes())
 
-        last_row_start = (rows - 1) * cols
+    def _scan_span(self) -> List[int]:
+        """逐簇 BFS：从顶行每个占据格出发，返回**第一个**纵贯（顶行 ↔ 底行）的簇。
+
+        分成一个个簇来试，而不是把顶行所有占据格一次连通：这样能精确指出是哪个簇
+        纵贯，界面才能把它单独高亮（一次大 BFS 会把互不相连的簇混在一起）。
+        方向模式照常生效，所以有向模式得到的是「有向纵贯簇」。
+        """
+        top = self.top_row_nodes()
+        if not top or not self.bottom_row_nodes():
+            return []
+
+        last_row_start = (self.rows - 1) * self.cols
         seen = bytearray(self.node_count)
-        queue: deque = deque()
-        for c in range(cols):
-            if self.occupied[0][c]:
-                seen[c] = 1
-                queue.append(c)
-
-        while queue:
-            idx = queue.popleft()
-            if idx >= last_row_start:
-                return True
-            for nb in self.neighbors(idx):
-                if not seen[nb]:
-                    seen[nb] = 1
-                    queue.append(nb)
-        return False
+        for c in top:
+            if seen[c]:
+                continue
+            members: List[int] = []
+            queue: deque = deque([c])
+            seen[c] = 1
+            reaches_bottom = False
+            while queue:
+                idx = queue.popleft()
+                members.append(idx)
+                if idx >= last_row_start:
+                    reaches_bottom = True
+                for nb in self.neighbors(idx):
+                    if not seen[nb]:
+                        seen[nb] = 1
+                        queue.append(nb)
+            if reaches_bottom:
+                return members          # 一圈下来能碰到末行，这一簇就是纵贯簇
+        return []
 
     # ------------------------------------------------------------------
     # 蔓延
@@ -649,9 +756,50 @@ class SitePercolation:
 
         return order, layers, reached_bottom
 
+    def spread_stats(self, origins: Optional[Sequence[int]] = None) -> Tuple[int, bool, bool]:
+        """一次 BFS 同时得到：(蔓延格数, 是否碰到顶行, 是否碰到底行)。
+
+        「面积判据」要的是第一项，「起点判据」要的是后两项，批量统计因此只需跑一遍。
+        """
+        rows, cols = self.rows, self.cols
+        last_row_start = (rows - 1) * cols
+        source = self.source_nodes() if origins is None else origins
+        seen = bytearray(self.node_count)
+        queue: deque = deque()
+        for idx in source:
+            if not seen[idx]:
+                seen[idx] = 1
+                queue.append(idx)
+
+        count = 0
+        touches_top = False
+        touches_bottom = False
+        while queue:
+            idx = queue.popleft()
+            count += 1
+            if idx < cols:
+                touches_top = True
+            if idx >= last_row_start:
+                touches_bottom = True
+            for nb in self.neighbors(idx):
+                if not seen[nb]:
+                    seen[nb] = 1
+                    queue.append(nb)
+        return count, touches_top, touches_bottom
+
     def spread_size(self, origins: Optional[Sequence[int]] = None) -> int:
         """只统计蔓延格数（批量统计的高速路径，不记录分层）。"""
-        return len(self._spread(origins or self.source_nodes(), with_layers=False)[0])
+        return self.spread_stats(origins)[0]
+
+    def origin_spans(self, origins: Optional[Sequence[int]] = None) -> bool:
+        """从注水点出发的蔓延簇是否**纵贯**（同时碰到顶行与底行）。
+
+        与 :meth:`has_spanning_cluster` 的区别：那个问「整片格地有没有纵贯簇」，
+        这个问「这次注水的那一簇是不是纵贯的」。注水方式为顶端整行时两者等价；
+        单点注水（随机 / 中心）额外要求起点落在纵贯簇里，所以概率更低。
+        """
+        _count, touches_top, touches_bottom = self.spread_stats(origins)
+        return touches_top and touches_bottom
 
     def simulate(self, origins: Optional[Sequence[int]] = None) -> SpreadResult:
         """从注水点蔓延一次，返回完整结果（含逐层信息）。
@@ -659,8 +807,11 @@ class SitePercolation:
         ``origins`` 省略时按 ``inject`` 设定自动挑选注水点。
         """
         started = time.perf_counter()
+        cols = self.cols
         source = list(origins) if origins is not None else self.source_nodes()
         spread, layers, reached_bottom = self._spread(source)
+        spanning = self.spanning_nodes()
+        touches_top = any(idx < cols for idx in spread)
         return SpreadResult(
             rows=self.rows,
             cols=self.cols,
@@ -672,7 +823,9 @@ class SitePercolation:
             threshold=self.threshold,
             criterion=self.criterion,
             reached_bottom=reached_bottom,
-            spans=self.has_spanning_cluster(),
+            spans=bool(spanning),
+            origin_spans=touches_top and reached_bottom,
+            spanning_nodes=spanning,
             elapsed=time.perf_counter() - started,
         )
 
@@ -704,6 +857,8 @@ def batch_spread_probability(
 
     * ``criterion="span"``：这次生成的格地上**存在纵贯簇**（顶行 ↔ 底行）。
       交点即 ``p_c``，且**与注水方式无关**（判据问的是整片格地的性质）；
+    * ``criterion="origin"``：按 ``inject`` 挑注水点出发，这一簇是否**纵贯**
+      （同时碰到顶行与底行）。顶端整行时与 ``span`` 等价，单点注水时交点高于 ``p_c``；
     * ``criterion="area"``：按 ``inject`` 挑注水点出发，蔓延比例 ≥ ``threshold``。
       交点随比例 / 尺寸 / 注水方式漂移，不是 ``p_c``。
 
@@ -720,6 +875,7 @@ def batch_spread_probability(
     )
     step = max(1, trials // 50)      # 进度回调频率：最多约 50 次
     span_criterion = criterion == "span"
+    origin_criterion = criterion == "origin"
     node_count = model.node_count
     success = 0
     ratio_sum = 0.0
@@ -731,11 +887,18 @@ def batch_spread_probability(
         if span_criterion:
             # 贯通判据：整片格地是否存在纵贯簇（与注水点无关）
             ok = model.has_spanning_cluster()
+            ratio_sum += model.spread_size() / node_count if node_count else 0.0
         else:
-            ok = (model.spread_size() / node_count) >= model.threshold if node_count else False
+            # 起点判据 / 面积判据都要先跑一次蔓延：一遍 BFS 同时得到两者所需的量
+            count, touches_top, touches_bottom = model.spread_stats()
+            ratio = count / node_count if node_count else 0.0
+            ratio_sum += ratio
+            if origin_criterion:
+                ok = touches_top and touches_bottom
+            else:
+                ok = ratio >= model.threshold
         if ok:
             success += 1
-        ratio_sum += model.spread_size() / node_count if node_count else 0.0
         done = i
         if progress is not None and (i % step == 0 or i == trials):
             progress(i, trials, success)
@@ -876,7 +1039,8 @@ if __name__ == "__main__":
         print(f"{threshold:>8.0%} | " + " | ".join(cells))
     print("-" * 78)
 
-    print("注水方式对照（方格网 32×32，p = 0.6，各 300 次）")
+    print("自检 3：三种判据 × 三种注水方式（方格网 32×32，p = 0.6，各 300 次）")
+    print("关键差别：贯通判据问「格地上有没有纵贯簇」，起点判据问「你这一把火纵贯吗」。")
     for criterion in CRITERIA:
         for inject in INJECT_MODES:
             res = batch_spread_probability(
@@ -886,5 +1050,20 @@ if __name__ == "__main__":
             print(f"  [{res.criterion_name}] {INJECT_NAMES[inject]:<8}"
                   f" P = {res.probability:.3f}   平均蔓延比例 = {res.mean_ratio:.3f}")
         print("-" * 78)
-    print("提示：贯通判据下注水方式完全不影响结果（判据问的是整片格地的性质），")
-    print("      面积判据下注水方式影响很大 —— 单点注水额外要求「起点落在巨簇里」。")
+
+    probe = SitePercolation(rows=32, p=0.6, rng=shared_rng, inject="random")
+    span_ok = 0
+    origin_in = 0
+    for _ in range(300):
+        probe.regenerate()
+        if probe.has_spanning_cluster():
+            span_ok += 1
+            if probe.origin_spans():
+                origin_in += 1
+    if span_ok:
+        print(f"同一批格地：存在纵贯簇 {span_ok}/300，其中随机注水点恰好落在簇内 "
+              f"{origin_in} 次（{origin_in / span_ok:.1%}）")
+        print("—— 这就是「起点判据」比「贯通判据」低的原因：火源可能落在纵贯簇之外。")
+    print("-" * 78)
+    print("提示：贯通判据下注水方式完全不影响结果（判据问的是整片格地的性质）；")
+    print("      起点判据 / 面积判据下影响很大 —— 单点注水额外要求「起点落在纵贯簇里」。")
