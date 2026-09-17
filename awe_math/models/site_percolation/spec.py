@@ -17,7 +17,8 @@ from __future__ import annotations
 import sys
 from typing import Any, Dict, List, Optional
 
-from ...spec import ActionSpec, ModelSpec, ParamSpec
+from ...spec import ActionSpec, CliArgs, ModelSpec, ParamSpec
+from .._cli import GRID_CLI_OPTIONS
 from .._options import (
     DIRECTION_CHOICES,
     LATTICE_CHOICES,
@@ -320,12 +321,17 @@ def handle(action: str, params: Dict[str, Any], payload: Dict[str, Any]) -> Dict
 # ----------------------------------------------------------------------
 # 终端模式
 # ----------------------------------------------------------------------
-def _cli(args) -> int:
-    """命令行模式：单次蔓延 + 批量统计，或扫描「密度 -> 蔓延概率」曲线。"""
-    rows = max(2, min(400, int(getattr(args, "size", 40))))
+def _cli(raw_args) -> int:
+    """命令行模式：单次蔓延 + 批量统计，或扫描「密度 -> 蔓延概率」曲线。
+
+    取值统一走 :class:`~awe_math.spec.CliArgs`：名字与默认值都来自
+    :data:`~awe_math.models._cli.GRID_CLI_OPTIONS` 的声明，不再手写魔法字符串。
+    """
+    args = CliArgs(raw_args, GRID_CLI_OPTIONS)
+    rows = max(2, min(400, int(args.rows)))
     cols = getattr(args, "cols", None)
     cols = rows if cols is None else max(2, min(400, int(cols)))
-    trials = max(1, int(getattr(args, "trials", 1000)))
+    trials = max(1, int(args.trials))
     raw_p = getattr(args, "p", None)
     p = 0.6 if raw_p is None else float(raw_p)
 
@@ -358,7 +364,7 @@ def _cli(args) -> int:
         rule = f"面积判据：蔓延比例 ≥ {threshold:.0%}"
 
     if getattr(args, "scan", False):
-        step = float(getattr(args, "step", 0.05))
+        step = float(args.step)
         p_values: List[float] = []
         k = 0
         while k * step <= 1.0 + 1e-9:
@@ -476,6 +482,8 @@ def build_spec() -> ModelSpec:
         icon="▦",
         handler=handle,
         cli=_cli,
+        # 终端命令行参数（与边渗流共用同一套声明；入口会汇总所有模型的声明）
+        cli_options=GRID_CLI_OPTIONS,
         # 对象级契约：桌面视图直接渲染、后台批量统计 / 曲线扫描都复用它，
         # 于是「界面参数 -> 模型」与「批量/扫描函数」不必在视图里再写一遍
         factory=build_grid,

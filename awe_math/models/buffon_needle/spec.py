@@ -13,8 +13,8 @@
 算法本身在 :mod:`~awe_math.models.buffon_needle.model` 中，与本文件完全解耦。
 
 它是本项目第一个**非渗流**模型：``spec.view`` 是 ``"buffon_needle"``，对应的桌面视图
-（``views/tk.py``）继承的是**通用骨架** :class:`~awe_math.ui.tk.kit.base.ModelViewBase`
-而不是渗流专用的 ``PercolationViewBase``。
+（``views/tk.py``）继承的是**通用图表骨架** :class:`~awe_math.ui.tk.kit.chart.ChartViewBase`
+（声明式图表 + 逐帧动画），而不是渗流专用的 ``PercolationViewBase``。
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from __future__ import annotations
 import sys
 from typing import Any, Dict, List, Optional
 
-from ...spec import ActionSpec, ModelSpec, ParamSpec
+from ...spec import ActionSpec, CliArgs, CliOption, ModelSpec, ParamSpec
 from .model import (
     DEFAULT_RATIO,
     DEFAULT_REPEATS,
@@ -68,6 +68,26 @@ ACTIONS = (
                hint="随机投 N 根针，画出布局并按命中率估计 π"),
     ActionSpec("converge", "多组重复估计", mode="once", kind="default",
                hint="重复若干组独立实验，观察 π 的估计值随样本量收敛"),
+)
+
+#: 本模型的终端命令行参数：**用自己的名字**，不再借渗流的 ``--p`` / ``--trials``
+CLI_OPTIONS = (
+    CliOption(
+        ("--ratio",), kind="float",
+        help="针长 / 线距 的比值 L/d（L ≤ d 时经典结论才成立），默认 0.8",
+    ),
+    CliOption(
+        ("--throws",), kind="int", default=DEFAULT_THROWS,
+        help=f"一次投掷多少根针，默认 {DEFAULT_THROWS}",
+    ),
+    CliOption(
+        ("--repeats",), kind="int", default=DEFAULT_REPEATS,
+        help=f"多组重复的组数，默认 {DEFAULT_REPEATS}",
+    ),
+    CliOption(
+        ("--scan",), kind="flag",
+        help="扫描：渗流模型扫 p 曲线、投针模型逐级放大投针数（不开窗口）",
+    ),
 )
 
 
@@ -189,22 +209,24 @@ def handle(action: str, params: Dict[str, Any], payload: Dict[str, Any]) -> Dict
 _SCAN_SIZES = (100, 200, 500, 1000, 2000, 5000, 10000)
 
 
-def _cli(args) -> int:
+def _cli(raw_args) -> int:
     """命令行模式：投针一次，或（``--scan``）逐级放大投针数观察收敛。
 
-    本模型可用的命令行参数（沿用统一入口的参数名）：
-    ``--p`` 表示「针长 / 线距」比值（默认 0.8）、``--trials`` 表示投针根数、
-    ``--seed`` 为随机种子、``--scan`` 切换为收敛扫描。
+    本模型声明了自己的命令行参数（见 :data:`CLI_OPTIONS`）：``--ratio``（针长 / 线距）、
+    ``--throws``（投针根数）、``--repeats``（重复组数）、``--scan``（收敛扫描）；
+    ``--seed`` 是全局选项。取值走 :class:`~awe_math.spec.CliArgs`，与声明保持一致。
     """
-    ratio = _resolve_ratio(getattr(args, "p", None))
-    throws = _resolve_throws(getattr(args, "trials", DEFAULT_THROWS))
+    args = CliArgs(raw_args, CLI_OPTIONS)
+    ratio = _resolve_ratio(args.ratio)
+    throws = _resolve_throws(args.throws)
+    repeats = _resolve_repeats(args.repeats)
     seed = _resolve_seed(getattr(args, "seed", -1))
     model = BuffonNeedle(ratio=ratio, throws=throws, rng=seed)
 
     header = (f"蒲丰投针 | L/d = {ratio:.2f}（针长 {model.length:.2f}，线距 {model.gap:.2f}）"
               f" | 理论命中率 2L/(πd) = {model.theory_rate:.4f}")
     print("=" * 78)
-    if getattr(args, "scan", False):
+    if args.scan:
         print(f"收敛扫描 | {header}")
         print("=" * 78)
         print(f"{'投针数 N':>10} | {'命中数 H':>10} | {'实测命中率':>12} | "
@@ -237,7 +259,7 @@ def _cli(args) -> int:
     print(f"耗时 {res.elapsed * 1000:.1f} ms")
     print("-" * 78)
 
-    conv = model.converge(repeats=DEFAULT_REPEATS)
+    conv = model.converge(repeats=repeats)
     total = conv.total_throws
     final = conv.pi_estimate
     print(f"多组重复 | {conv.repeats} 组 × {conv.throws_per_group} 根 = {total} 根，"
@@ -284,6 +306,8 @@ def build_spec() -> ModelSpec:
         icon="π",
         handler=handle,
         cli=_cli,
+        # 终端命令行参数：自己的名字（--ratio / --throws / --repeats），不是别名
+        cli_options=CLI_OPTIONS,
         highlights=("随机投针估计 π：π ≈ 2LN/(dH)",
                     "L ≤ d 时命中概率 = 2L/(πd)",
                     "投针越多越准，误差 ≈ 1/√N"),

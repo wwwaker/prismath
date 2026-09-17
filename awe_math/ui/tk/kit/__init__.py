@@ -23,7 +23,10 @@
 本包对外的主要 API
 ------------------
 * 视图注册：:func:`register_view`、:func:`view_for`、:func:`registered_views`
-* 视图基类：:class:`~awe_math.ui.tk.kit.base.PercolationViewBase`（骨架与钩子契约）
+* 视图骨架（按"要写多少界面代码"从少到多）：
+  :class:`~awe_math.ui.tk.kit.chart.ChartViewBase`（**通用图表**：声明式图表 + 动画，推荐）、
+  :class:`~awe_math.ui.tk.kit.base.ModelViewBase`（**万能**：自己画中央 / 右侧）、
+  :class:`~awe_math.ui.tk.kit.base.PercolationViewBase`（**渗流特化**：概率 / 格子 / 判据 / 逐层蔓延）
 * 公共件：:class:`~awe_math.ui.tk.kit.common.Terms`（术语表）、
   :class:`~awe_math.ui.tk.kit.common.ActiveView`（结果归一化）与共用配色常量。
 """
@@ -36,6 +39,7 @@ from typing import Callable, Dict, List, Optional, Type
 
 from .base import ModelViewBase, PercolationViewBase
 from .canvas import CanvasMixin
+from .chart import ChartSpec, ChartViewBase
 from .common import (  # noqa: F401  供模型视图直接取用
     BADGE_BAD_BG,
     BADGE_BAD_FG,
@@ -56,7 +60,7 @@ from .common import (  # noqa: F401  供模型视图直接取用
     Terms,
 )
 from .controls import SidebarMixin
-from .criteria import DEFAULT_CRITERIA, Criterion
+from .criteria import BAD, DEFAULT_CRITERIA, NO, OK, Criterion
 from .form import ParamFormMixin, iter_param_groups
 from .jobs import JobsMixin
 from .protocols import (
@@ -77,6 +81,8 @@ __all__ = [
     "discover_views",
     # 骨架
     "ModelViewBase",
+    "ChartViewBase",
+    "ChartSpec",
     "PercolationViewBase",
     "CanvasMixin",
     "SidebarMixin",
@@ -94,6 +100,9 @@ __all__ = [
     # 判据策略
     "Criterion",
     "DEFAULT_CRITERIA",
+    "OK",
+    "NO",
+    "BAD",
     # 公共件
     "Terms",
     "ActiveView",

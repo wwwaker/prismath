@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-桌面视图基类：通用骨架 + 渗流特化子类
+桌面视图基类：万能骨架 + 渗流特化子类
 ========================================
 
 桌面视图层分成两层，避免"想要一个界面"就得先成为渗流模型：
 
-* :class:`ModelViewBase` —— **通用骨架，不认识任何模型**。它提供三栏布局、状态栏与进度条、
+* :class:`ModelViewBase` —— **万能骨架，不认识任何模型**。它提供三栏布局、状态栏与进度条、
   后台任务机制（线程 / 队列 / 取消）、生命周期与快捷键，以及**由 ``spec.params`` 自动生成
   的参数表单**（见 :mod:`~awe_math.ui.tk.kit.form`）与**由 ``spec.actions`` 生成的动作按钮**。
   一个模型只要有了 ``ModelSpec``，继承本类就能立刻拿到一套可用的桌面界面（跑动作 + 看结果）。
-* :class:`PercolationViewBase` —— **渗流特化子类**。它在通用骨架之上补上"概率 p + 格子 +
+* :class:`PercolationViewBase` —— **渗流特化子类**。它在万能骨架之上补上"概率 p + 格子 +
   判据 + 逐层蔓延"这套语义：参数/判据状态机、逐层动画画布、批量统计与 P(p) 曲线、纵贯簇
   高亮等。边渗流与点渗流两个视图都继承它，只需给出术语表、指标行与几个画布钩子。
 
@@ -35,7 +35,7 @@
    :mod:`~awe_math.ui.tk.kit.results`）：``_draw_base`` / ``_apply_active`` /
    ``_layer_color`` / ``_legend_items`` / ``_fill_extra_rows`` / ``_size_text``。
 
-通用骨架（:class:`ModelViewBase`）则负责与模型无关的共性：三栏布局与滚动侧栏、参数表单、
+万能骨架（:class:`ModelViewBase`）则负责与模型无关的共性：三栏布局与滚动侧栏、参数表单、
 动作分派、后台任务轮询、状态栏与进度、快捷键与资源释放。它要求"模型对象长什么样"这一点，
 已写成显式契约 :mod:`~awe_math.ui.tk.kit.protocols`（``PercolationModel`` 等）。
 """
@@ -191,6 +191,7 @@ class ModelViewBase(ParamFormMixin, ViewContract):
         self._sidebar_area = area
         side = area.inner
 
+        self._build_top_cards(side)        # 常用控件（如"动画"卡片）放侧栏最上面
         self._build_param_cards(side)
         self._build_action_card(side)
         self._build_extra_cards(side)
@@ -217,8 +218,15 @@ class ModelViewBase(ParamFormMixin, ViewContract):
             btn.pack(fill="x", pady=(0, 4))
             self._action_buttons.append(btn)
 
+    def _build_top_cards(self, parent: tk.Widget) -> None:
+        """侧栏**最上面**的自定义卡片（默认没有）。
+
+        与 :meth:`_build_extra_cards` 对称：有些控件用得太频繁（例如"动画 / 播放"卡片），
+        放在参数与动作下方要滚到底才看得见，所以给它一个置顶的位置。
+        """
+
     def _build_extra_cards(self, parent: tk.Widget) -> None:
-        """给子类追加自定义卡片的位置（默认没有）。"""
+        """给子类追加自定义卡片的位置（默认没有，排在参数与动作卡片之后）。"""
 
     def _build_center(self) -> None:
         """通用中央区：一块只读文本，用来展示动作返回的 JSON 结果。"""
@@ -254,18 +262,22 @@ class ModelViewBase(ParamFormMixin, ViewContract):
     # 通用动作分派（走 ModelSpec.handler）
     # ------------------------------------------------------------------
     def run_action(self, key: str) -> None:
-        """用当前参数运行一次动作，把结果（或错误）渲染到中央文本区。"""
+        """用当前参数运行一次动作，把结果（或错误）交给 :meth:`_render_result` 渲染。
+
+        状态栏先写一句通用文案，**渲染器可以覆盖它**（:meth:`_render_result` 里改
+        ``var_status`` 即可）——于是自定义视图不必为了换一句话而重写本方法。
+        """
         if self.spec is None:
             return
         try:
             result = self.spec.run(key, self.current_params(), {})
         except Exception as exc:          # 把模型异常直接展示出来，方便排查
             message = f"{type(exc).__name__}: {exc}"
-            self._render_result({"error": message})
             self.var_status.set(f"运行失败：{message}")
+            self._render_result({"error": message})
             return
-        self._render_result(result)
         self.var_status.set(f"动作「{key}」已完成。")
+        self._render_result(result)
 
     def _render_result(self, payload: Any) -> None:
         """把结果渲染进 :attr:`output`（通用中央区的只读文本框）。"""
@@ -330,7 +342,7 @@ class ModelViewBase(ParamFormMixin, ViewContract):
     # 生命周期与快捷键
     # ------------------------------------------------------------------
     def on_key(self, key: str) -> None:
-        """通用骨架不响应快捷键（渗流子类会覆盖：空格播放动画、R 重新生成）。"""
+        """万能骨架不响应快捷键（渗流子类会覆盖：空格播放动画、R 重新生成）。"""
 
     def shutdown(self) -> None:
         """视图被关闭（或切换到别的模型）时释放资源并停止后台任务。"""
@@ -355,7 +367,7 @@ class ModelViewBase(ParamFormMixin, ViewContract):
 
 class PercolationViewBase(JobsMixin, SidebarMixin, ResultPanelMixin, CanvasMixin,
                           ModelViewBase):
-    """渗流类模型的桌面视图骨架：在通用骨架上补「概率 + 格子 + 判据 + 逐层蔓延」语义。"""
+    """渗流类模型的桌面视图骨架：在万能骨架上补「概率 + 格子 + 判据 + 逐层蔓延」语义。"""
 
     # ==================================================================
     # 子类提供的「数据」

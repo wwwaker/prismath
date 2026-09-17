@@ -158,6 +158,15 @@ class ParamFormMixin:
                 if param.key in skip:
                     continue
                 self._add_param_row(card, param, show_hints=show_hints)
+            self._param_card_footer(card, name)
+
+    def _param_card_footer(self, card: tk.Misc, group: str) -> None:
+        """某个参数分组卡片**底部**的附加控件（默认没有）。
+
+        给"这一组参数要配合某个按钮按下才生效"的场景用：生命游戏的「生成开局」就挂在
+        「开局」卡片底下 —— 它和上面的图案 / 密度 / 种子是同一件事，分开放会看不懂。
+        """
+        return None
 
     def _add_param_row(self, card: tk.Misc, param: ParamSpec,
                        *, show_hints: bool = False) -> tk.Widget:

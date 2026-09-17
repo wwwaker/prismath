@@ -234,7 +234,8 @@ class ScanRunner(Protocol):
 class ViewContract:
     """各 mixin 共享的宿主属性声明（**仅用于类型检查，运行时不定义任何东西**）。
 
-    基类 :class:`~awe_math.ui.tk.kit.base.ModelViewBase` / ``PercolationViewBase``
+    基类 :class:`~awe_math.ui.tk.kit.chart.ChartViewBase` /
+    :class:`~awe_math.ui.tk.kit.base.ModelViewBase` / ``PercolationViewBase``
     与各 mixin（画布 / 侧栏 / 结果 / 后台任务）都继承本类，于是静态检查器在单独分析某个
     mixin 时也能看到 ``self.model``、``self.var_status`` 等属性的类型，不再报
     "Cannot access attribute"。这也把"基类必须提供什么"集中写在了这一处。

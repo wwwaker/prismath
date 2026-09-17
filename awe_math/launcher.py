@@ -68,6 +68,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --model percolation           直接进边渗流模型的窗口\n"
             "  python main.py --menu                        终端交互模式（选模型 → 选界面）\n"
             "  python main.py --model perc --ui cli --scan  终端里扫描 P(p) 曲线\n"
+            "  python main.py --model buffon --ui cli --ratio 0.6 --throws 5000\n"
+            "                                               终端里投针估计 π\n"
             "  python main.py --ui web                      网页界面（暂时弃用，需显式指定）\n"
         ),
     )
@@ -79,6 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
                              "web（网页，暂时弃用，需显式指定）")
     parser.add_argument("--menu", action="store_true",
                         help="终端交互模式：在命令行里依次选择模型与界面后端")
+    parser.add_argument("--seed", type=int, default=-1,
+                        help="随机种子，-1 表示随机（所有模型通用）")
 
     web = parser.add_argument_group("网页界面选项（暂时弃用的 web 后端）")
     web.add_argument("--host", default="127.0.0.1", help="监听地址，默认 127.0.0.1（仅本机）")
@@ -87,32 +91,56 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--desktop", action="store_true",
                      help="用独立桌面窗口打开（需 pip install pywebview），否则用浏览器")
 
-    model = parser.add_argument_group("模型参数（终端模式下使用；桌面/网页界面可在界面里调）")
-    model.add_argument("--p", type=float, default=None,
-                       help="概率参数（边渗流=流通概率，点渗流=占据密度）；省略则用模型默认值")
-    model.add_argument("--size", type=int, default=40, help="行数（方格网时即边长），默认 40")
-    model.add_argument("--cols", type=int, default=None,
-                       help="列数；与行数不同即为矩形网格，省略则与行数相同")
-    model.add_argument("--lattice", choices=("square", "triangular"), default=None,
-                       help="格子类型：square 方格网（4 邻域）/ triangular 三角网（6 邻域）")
-    model.add_argument("--direction", default=None,
-                       choices=("undirected", "no_up", "down_right", "down_left"),
-                       help="方向模式：无向 / 不允许向上 / 只允许向下向右 / 只允许向下向左")
-    model.add_argument("--inject", choices=("top", "center", "random"), default=None,
-                       help="注水（起始）方式：顶端整行 / 中心 / 随机单点；省略则用模型默认值")
-    model.add_argument("--criterion", choices=("span", "origin", "area"), default=None,
-                       help="成功判据：span = 整片网格存在纵贯簇（对应 p_c，默认）；"
-                            "origin = 注水点出发的那一簇是否纵贯（随注水方式变化）；"
-                            "area = 面积比例达到阈值（无固定临界值）")
-    model.add_argument("--threshold", choices=("0.3", "0.5", "0.7", "0.9"), default=None,
-                       help="（判据 = area 时）面积判据的比例阈值，默认 0.5")
-    model.add_argument("--trials", type=int, default=1000, help="统计次数，默认 1000")
-    model.add_argument("--scan", action="store_true", help="扫描 p 从 0 到 1 的概率曲线")
-    model.add_argument("--step", type=float, default=0.05, help="扫描步长，默认 0.05")
-    model.add_argument("--seed", type=int, default=-1, help="随机种子，-1 表示随机")
-    model.add_argument("--directed", action="store_true",
-                       help="（旧选项）等价于 --direction no_up")
+    _add_model_options(parser)
     return parser
+
+
+def _add_model_options(parser: argparse.ArgumentParser) -> None:
+    """把各模型用 ``spec.cli_options`` 声明的命令行参数汇总进解析器。
+
+    同一组选项串只登记一次（多个模型共用时会标注在帮助里），因此渗流模型可以共用一套
+    ``GRID_CLI_OPTIONS``，而蒲丰投针用自己的 ``--ratio`` / ``--throws`` —— 
+    **不再是"借别人的参数名当别名"**。
+
+    不属于当前模型的选项会被解析器接受但在执行时忽略：这是"一个入口、多个模型"的取舍，
+    换来的是每个模型的参数名都能贴合自己的语义。
+    """
+    try:
+        models = load_models()
+    except Exception:            # 模型导入失败时不影响 --help / --list 等基础功能
+        return
+
+    collected: "dict[tuple, list]" = {}
+    for spec in models:
+        for option in getattr(spec, "cli_options", ()) or ():
+            collected.setdefault(tuple(option.flags), []).append((spec, option))
+    if not collected:
+        return
+
+    # 同一个属性名不能由两组不同的选项串声明：argparse 允许这么加，后写的会静默覆盖先写的，
+    # 于是 _cli 取到的默认值属于谁就说不清了 —— 这种隐患在启动时直接报错更省事。
+    by_key: "dict[str, tuple]" = {}
+    for flags, entries in collected.items():
+        for _spec, option in entries:
+            previous = by_key.setdefault(option.key, flags)
+            if previous != flags:
+                raise ValueError(
+                    f"命令行选项声明冲突：属性名 {option.key!r} 同时来自 {previous} 与 {flags}；"
+                    "请用 CliOption(dest=...) 明确区分，或合并成一个声明"
+                )
+
+    group = parser.add_argument_group(
+        "模型参数（含义随所选模型而定；不属于当前模型的参数会被忽略）")
+    for flags, entries in collected.items():
+        option = entries[0][1]
+        kwargs = option.to_argparse()
+        owners = list(dict.fromkeys(spec.name for spec, _ in entries))
+        if len(owners) > 1 and kwargs.get("help"):
+            kwargs["help"] = f"{kwargs['help']}（{' / '.join(owners)} 通用）"
+        try:
+            group.add_argument(*flags, **kwargs)
+        except argparse.ArgumentError:      # 与通用选项冲突：跳过，保留通用那个
+            continue
 
 
 # ----------------------------------------------------------------------

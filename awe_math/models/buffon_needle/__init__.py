@@ -9,8 +9,8 @@
 * :mod:`awe_math.models.buffon_needle.model` —— 纯计算内核（投针几何 + Monte Carlo 估计）
 * :mod:`awe_math.models.buffon_needle.spec`  —— 界面元数据与动作处理器
 
-它是本项目第一个**非渗流**模型：桌面视图继承通用骨架 ``ModelViewBase``（而非
-渗流专用的 ``PercolationViewBase``），参数表单由 ``spec.params`` 自动生成。
+它是本项目第一个**非渗流**模型：桌面视图继承**通用图表骨架** ``ChartViewBase``（而非
+渗流专用的 ``PercolationViewBase``），参数表单由 ``spec.params`` 自动生成，图表只写声明。
 
 导入本包即完成模型注册。
 """

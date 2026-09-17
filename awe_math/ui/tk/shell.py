@@ -43,11 +43,15 @@ __all__ = ["DesktopShell", "FallbackView", "launch"]
 
 
 class FallbackView(ModelViewBase):
-    """通用兜底视图：继承通用骨架 :class:`~awe_math.ui.tk.kit.base.ModelViewBase`。
+    """通用兜底视图：继承万能骨架 :class:`~awe_math.ui.tk.kit.base.ModelViewBase`。
 
     没有专用渲染器的模型也能在桌面里跑动作、看结果：参数表单由 ``spec.params`` 自动生成，
-    按钮由 ``spec.actions`` 生成，结果以 JSON 显示。想给某个模型定制界面时，写一份
-    ``views/tk.py`` 继承 :class:`ModelViewBase`（或渗流子类 ``PercolationViewBase``）即可。
+    按钮由 ``spec.actions`` 生成，结果以 JSON 显示。
+
+    想给某个模型定制界面时，按需选一个骨架写 ``views/tk.py``：**通用图表骨架**
+    :class:`~awe_math.ui.tk.kit.chart.ChartViewBase`（声明式图表 + 动画，多数非渗流模型用它）、
+    **万能骨架** :class:`ModelViewBase`（中央 / 右侧自己画），或**渗流特化骨架**
+    :class:`~awe_math.ui.tk.kit.base.PercolationViewBase`。
     """
 
     HINTS = "该模型暂无专用桌面视图，可用左侧参数与动作运行"
@@ -82,6 +86,10 @@ class DesktopShell:
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         root.bind("<space>", lambda _e: self._dispatch_key(" "))
         root.bind("<Key-r>", lambda _e: self._dispatch_key("r"))
+        # 数字键 1..9：触发当前视图的第 n 个动作（ChartViewBase 的约定；
+        # 焦点在输入框里时不转发，见 _dispatch_key）
+        for digit in "123456789":
+            root.bind(f"<Key-{digit}>", lambda _e, d=digit: self._dispatch_key(d))
 
     # ==================================================================
     # 顶部标题栏
@@ -181,7 +189,12 @@ class DesktopShell:
     # ==================================================================
     def _dispatch_key(self, key: str) -> None:
         """把快捷键转发给当前视图；正在输入框里打字时不触发。"""
-        focus = self.root.focus_get()
+        try:
+            focus = self.root.focus_get()
+        except KeyError:
+            # ttk 下拉框弹出列表（popdown）不在父窗口的 children 里，focus_get() 会抛
+            # KeyError —— 按普通键处理即可（只读下拉框里也没有文本可输入）。
+            focus = None
         if isinstance(focus, (tk.Entry, tk.Text, ttk.Entry, ttk.Spinbox, ttk.Combobox)):
             return
         if self.view is not None:
