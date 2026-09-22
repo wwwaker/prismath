@@ -125,12 +125,27 @@ ACTIONS = (
 
 
 def _pick(mapping: Dict[str, str], value: Any, fallback: str) -> str:
-    """把界面上的中文选项翻译成模型内部取值（无法识别时回退）。"""
-    return mapping.get(str(value), fallback)
+    """把界面上的中文选项翻译成模型内部取值。
+
+    两种写法都要认：**中文标签**（界面表单直接给出的就是它）与**已经是内部取值**的字符串
+    （分块批量的 payload 会把上一次结果的字段回传，那些字段存的就是内部取值）。
+    早先只查 ``mapping.get(value)``，于是"回传内部取值"会被当成无法识别而落到 fallback ——
+    对 ``lattice`` / ``direction`` / ``inject`` 来说，那会把用户选的格子与方向静默换掉。
+    """
+    text = str(value)
+    if text in mapping:
+        return mapping[text]
+    if text in mapping.values():
+        return text
+    return fallback
 
 
 def _resolve_seed(value: Any) -> Optional[int]:
-    """把界面传来的种子转成 ``random`` 可用的形式：-1 表示随机。"""
+    """把界面传来的种子转成内核可用的形式（``None | int``）：-1 表示随机。
+
+    内核的随机源是 ``numpy.random.default_rng``，它只接受 ``None`` / 整数 /
+    ``Generator`` —— 传字符串或 ``random.Random`` 会直接抛异常，所以这里必须落成整数。
+    """
     try:
         seed = int(value)
     except (TypeError, ValueError):

@@ -57,17 +57,50 @@
 已知的解析值 / 文献值见 :data:`THEORETICAL_PC_BY_COMBO`，文献不全的组合给出蒙特卡洛
 估计值（见 :data:`ESTIMATED_PC_BY_COMBO`，界面会标注为「估计值」）。
 
-本模块只依赖 Python 标准库，可单独导入使用（不含任何绘图/GUI 代码）。
+实现要点（为什么这样写）
+------------------------
+1. **边的流通状态是一整块 numpy 布尔数组**：生成一次网格 = 一次
+   ``rng.random(边数) < p``，而不是逐边 Python 随机调用；四张分类型边表
+   （``h_edge`` / ``v_edge`` / ``dl_edge`` / ``dr_edge``）仍是"唯一真相"，
+   :func:`encode_edges` 与界面读的就是它们。
+2. **另有一条"按边号摊平"的 ``bytes`` 缓存**：逐层推进要逐边问"这条边通不通"，
+   ``bytes`` 下标比 numpy 标量索引快一个量级。
+3. **邻居表 + 逐层推进**：方向过滤（四种模式）与格子类型在**建模时**编译成邻居表
+   （每个节点"允许走出去"的 ``(邻居, 边号)``）。蔓延是唯一必须串行的部分，所以它
+   **刻意不用 numpy**：内层循环只剩"查这条边通不通 + 查这个点浸过没有"。
+   （点渗流那边试过"逐层数组运算"，实测在小网格上反而更慢，这里直接采用紧凑循环。）
+4. **无向模式的并查集路径照旧保留**（:meth:`PercolationGrid.percolates_uf`）：它一次
+   union 所有流通边，比 BFS 更快，而且正是"临界 p"单遍扫描的现成地基。
+
+实测（Windows / Python 3.13，方格网 40×40，p 取在 p_c 附近最费时；中位数）
+----------------------------------------------------------------------
+复现命令：``python -m tests.bench percolation``
+
+* 贯通判据 × 无向批量 300 次 **142 ms**（≈ 0.47 ms/次试验，走并查集）；
+* **扫描 5 个 p 各 100 次 174 ms** —— 默认组合走"临界 p"单遍扫描（见 :func:`scan_curve`），
+  对照"逐 p 重跑"的老路径 502 ms 约快 **3×**；点数越多越划算（20 点时约 11×）；
+* 贯通判据 × 有向下右批量 300 次 **97 ms**（有向模式走 BFS，反而比并查集那条路更快）；
+* 起点判据 × 随机单点 300 次 **29 ms**；面积判据 × 中心单点 300 次 **38 ms**；
+* 三角网贯通批量 300 次 **787 ms**（p 正落在 p_c = 0.5 上：簇最大、每点最多 6 条边）；
+* 界面用的单次模拟（含分层）**5.6 ms**（含建邻居表）；内置自检 **24.35 s → 10.6 s**（约 2.3×）。
+
+**为什么这里只快了 2.3×（点渗流是 4.9×）**：无向模式的批量统计走
+:meth:`PercolationGrid.percolates_uf`，它逐边 ``union`` 是纯 Python 循环 —— 生成与遍历
+变快之后，**并查集成了新的瓶颈**。这也正是"临界 p 单遍扫描"（一次试验做一遍 union 扫描
+就能给出整条 ``P(p)`` 曲线，而不是每个 ``p`` 重跑一遍）值得做的原因。
+
+本模块只依赖标准库 + ``numpy``；numpy 现在是**必需依赖**（内核统一向量化，不再维护
+标准库回退实现 —— 见 README 的「依赖规则」）。不含任何绘图 / GUI 代码，可单独导入。
 """
 
 from __future__ import annotations
 
 import math
-import random
 import time
-from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
+
+import numpy as np
 
 __all__ = [
     "THEORETICAL_PC",
@@ -181,20 +214,31 @@ INJECT_NAMES: Dict[str, str] = {
     "random": "随机单点",
 }
 
-#: 随机源可以传入 None / int（种子）/ random.Random 实例
-RngLike = Union[None, int, random.Random]
+#: 随机源可以传入 None / int（种子）/ numpy Generator 实例
+RngLike = Union[None, int, np.random.Generator]
 
 #: 进度回调：progress(已完成, 总数, 成功次数)
 ProgressCallback = Callable[[int, int, int], None]
 
 
-def _resolve_rng(rng: RngLike = None) -> random.Random:
-    """把 None / 种子 / Random 实例统一转换成一个 ``random.Random`` 对象。"""
-    if isinstance(rng, random.Random):
+def _resolve_rng(rng: RngLike = None) -> np.random.Generator:
+    """把 None / 种子 / Generator 实例统一转换成一个 numpy 随机源。
+
+    注意：从 ``random.Random`` 换成 numpy 之后，**同一个种子不再生成同一张网格** ——
+    可复现性只在同一实现内成立（这是本次重构被明确接受的代价之一）。
+    """
+    if isinstance(rng, np.random.Generator):
         return rng
-    if rng is None:
-        return random.Random()
-    return random.Random(rng)
+    return np.random.default_rng(rng)
+
+
+def _derive_rng(parent: np.random.Generator) -> np.random.Generator:
+    """从主随机源派生一个独立随机源（给"随机注水点"专用）。
+
+    这样「随机注水」不会消耗生成网格的那串随机数：同一颗种子下，不同注水方式生成的
+    网格序列完全相同，「贯通判据与注水方式无关」这件事才能在同一批网格上逐次验证。
+    """
+    return np.random.default_rng(int(parent.integers(0, 2 ** 63)))
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -202,14 +246,19 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 
 class UnionFind:
-    """并查集（带路径压缩 + 按秩合并），用于快速判断连通性。"""
+    """并查集（带路径压缩 + 按秩合并），用于快速判断连通性。
 
-    __slots__ = ("parent", "rank", "count")
+    ``size`` 记录每个根所在分量的节点数 —— "临界 p 单遍扫描"要用它跟踪**顶端簇**随概率
+    的生长（"平均浸润比例"就是这条分段常量轨迹）。
+    """
+
+    __slots__ = ("parent", "rank", "count", "size")
 
     def __init__(self, n: int) -> None:
         self.parent: List[int] = list(range(n))
         self.rank: List[int] = [0] * n
         self.count: int = n
+        self.size: List[int] = [1] * n
 
     def find(self, x: int) -> int:
         parent = self.parent
@@ -228,6 +277,7 @@ class UnionFind:
         if self.rank[ra] < self.rank[rb]:
             ra, rb = rb, ra
         self.parent[rb] = ra
+        self.size[ra] += self.size[rb]
         if self.rank[ra] == self.rank[rb]:
             self.rank[ra] += 1
         self.count -= 1
@@ -235,6 +285,10 @@ class UnionFind:
 
     def connected(self, a: int, b: int) -> bool:
         return self.find(a) == self.find(b)
+
+    def component_size(self, x: int) -> int:
+        """``x`` 所在分量的节点数。"""
+        return self.size[self.find(x)]
 
 
 @dataclass
@@ -403,8 +457,8 @@ class PercolationGrid:
         行数与列数；``cols`` 省略时取 ``rows``（正方形网格）。
     p : float
         每条边的流通概率，取值 ``[0, 1]``。
-    rng : None | int | random.Random
-        随机源，可以是种子（便于复现）。
+    rng : None | int | numpy.random.Generator
+        随机源，可以是种子（便于复现；同一种子在同一实现内可复现）。
     direction : str
         ``undirected`` / ``no_up`` / ``down_right`` / ``down_left``，见模块文档。
     lattice : str
@@ -451,24 +505,35 @@ class PercolationGrid:
         self.inject = inject
         self.criterion = criterion
         self.threshold = _clamp(float(threshold), 0.05, 1.0)
-        self.rng: random.Random = _resolve_rng(rng)
+        self.rng: np.random.Generator = _resolve_rng(rng)
         #: 随机注水点专用的随机源（从主随机源派生）：这样「随机注水」不会去消耗
         #: 生成网格的那串随机数，同一颗种子下不同注水方式的网格序列完全相同，
         #: 「贯通判据与注水方式无关」这件事才能在同一批网格上被逐次验证。
-        self._source_rng: random.Random = random.Random(self.rng.getrandbits(64))
+        self._source_rng: np.random.Generator = _derive_rng(self.rng)
 
-        #: h_edge[r][c] 表示 (r, c) 与 (r, c+1) 之间的水平边是否流通
-        self.h_edge: List[List[bool]] = []
+        #: h_edge[r][c] 表示 (r, c) 与 (r, c+1) 之间的水平边是否流通（numpy 布尔表）
+        self.h_edge: np.ndarray = np.zeros((self.rows, max(self.cols - 1, 0)), dtype=bool)
         #: 方格网：v_edge[r][c] 表示 (r, c) 与 (r+1, c) 之间的垂直边是否流通
-        self.v_edge: List[List[bool]] = []
+        self.v_edge: np.ndarray = np.zeros((0, 0), dtype=bool)
         #: 三角网：dl_edge[r][c] 表示 (r, c) 与 (r+1, c-1+shift) 之间的左下斜边
-        self.dl_edge: List[List[bool]] = []
+        self.dl_edge: np.ndarray = np.zeros((0, 0), dtype=bool)
         #: 三角网：dr_edge[r][c] 表示 (r, c) 与 (r+1, c+shift) 之间的右下斜边
-        self.dr_edge: List[List[bool]] = []
+        self.dr_edge: np.ndarray = np.zeros((0, 0), dtype=bool)
+        #: 按边号摊平的流通掩码（bytes 缓存，逐层推进逐边查它；见 :meth:`_refresh_open_edges`）
+        self._open_bytes: bytes = b""
+        #: 邻居表：每个节点"允许走出去"的 ``(邻居, 边号)``（见 :meth:`_build_edge_table`）
+        self._nbr: List[List[Tuple[int, int]]] = []
+        #: 边号 -> ``(节点a, 节点b)``，``a < b``（``iter_all_edges`` 用）
+        self._edge_pairs: List[Tuple[int, int]] = []
+        #: 边号 -> 该边在"分类型数组拼成长数组"里的下标（三角网里有越界占位，不能靠数）
+        self._edge_source: np.ndarray = np.empty(0, dtype=np.intp)
+        #: 末行起始下标（"到底端" = 下标 ≥ 它），热路径反复用到
+        self._last_row_start: int = (self.rows - 1) * self.cols
         #: inject == "random" 时使用的随机注水点（随网格一起生成，便于复现）
         self._random_source: Optional[int] = None
         #: 当前网格纵贯簇的节点清单缓存（None 表示尚未判定，空列表表示没有纵贯簇）
         self._spanning_nodes: Optional[List[int]] = None
+        self._build_edge_table()
         self.regenerate()
 
     # ------------------------------------------------------------------
@@ -549,6 +614,106 @@ class PercolationGrid:
         """一维节点索引 -> (行, 列)。"""
         return divmod(index, self.cols)
 
+    def _build_edge_table(self) -> None:
+        """把「格子类型 + 方向模式」编译成邻居表（只与几何有关，与 ``p`` 无关）。
+
+        边号顺序固定为 **水平边（行优先）→ 方格网的垂直边 / 三角网的左下斜边 → 三角网的
+        右下斜边**，与 :meth:`_refresh_open_edges` 的拼接顺序必须一致。
+
+        这里的每一条都必须与 :meth:`_candidate_neighbors` + :meth:`direction_allows`
+        严格一致（``tests/test_percolation.py`` 里对小块网格逐条比对过）。
+        """
+        rows, cols = self.rows, self.cols
+        #: (a, b, dr, dc, source)：一条边、"从 a 走到 b"的方向、以及它在拼接长数组里的下标
+        edges: List[Tuple[int, int, int, int, int]] = []
+        add = edges.append
+
+        h_size = rows * (cols - 1)
+        if self.lattice == "square":
+            v_offset, dl_offset, dr_offset = h_size, 0, 0
+        else:
+            v_offset, dl_offset = h_size, h_size
+            dr_offset = h_size + (rows - 1) * cols
+
+        for r in range(rows):
+            base = r * cols
+            for c in range(cols - 1):
+                add((base + c, base + c + 1, 0, 1, r * (cols - 1) + c))
+
+        if self.lattice == "square":
+            for r in range(rows - 1):
+                base, nxt = r * cols, r * cols + cols
+                for c in range(cols):
+                    add((base + c, nxt + c, 1, 0, v_offset + r * cols + c))
+        else:
+            # 三角网的斜边数组里有"越界占位"（恒 False），所以每一条边的下标必须
+            # 单独算出来（不能靠"数到第几个有效边"来对齐）——这正是护栏抓到的坑。
+            for r in range(rows - 1):
+                base, nxt, shift = r * cols, r * cols + cols, r % 2
+                for c in range(cols):
+                    target = c - 1 + shift
+                    if 0 <= target < cols:
+                        add((base + c, nxt + target, 1, target - c,
+                             dl_offset + r * cols + c))
+            for r in range(rows - 1):
+                base, nxt, shift = r * cols, r * cols + cols, r % 2
+                for c in range(cols):
+                    target = c + shift
+                    if 0 <= target < cols:
+                        add((base + c, nxt + target, 1, target - c,
+                             dr_offset + r * cols + c))
+
+        self._edge_pairs = [(a, b) for a, b, _dr, _dc, _src in edges]
+        self._edge_source = np.asarray([src for _a, _b, _dr, _dc, src in edges],
+                                       dtype=np.intp)
+
+        # 邻居表：只保留方向模式允许走出去的那些边（两个方向各自判一次）
+        neighbours: List[List[Tuple[int, int]]] = [[] for _ in range(rows * cols)]
+        for eid, (a, b, dr, dc, _src) in enumerate(edges):
+            if self.direction_allows(dr, dc):
+                neighbours[a].append((b, eid))
+            if self.direction_allows(-dr, -dc):
+                neighbours[b].append((a, eid))
+        self._nbr = neighbours
+        #: 本次编译对应的结构（尺寸 / 格子 / 方向）—— 结构一变就必须重编（见 _ensure_ready）
+        self._structure_key: Tuple[int, int, str, str] = (rows, cols, self.lattice, self.direction)
+        #: 末行起始下标（"到底端" = 下标 ≥ 它）——它也由尺寸决定，跟着一起刷新
+        self._last_row_start: int = (rows - 1) * cols
+
+    def _refresh_open_edges(self) -> None:
+        """把四张分类型边表摊平成**按边号排列**的 ``bytes`` 缓存。
+
+        唯一真相仍是 ``h_edge`` / ``v_edge`` / ``dl_edge`` / ``dr_edge``
+        （:func:`encode_edges` 与界面读的就是它们）；这里只是把它们按 :meth:`_build_edge_table`
+        的边号顺序拼起来，让逐层推进不必对 numpy 做逐元素索引（``bytes`` 下标快一个量级）。
+        """
+        arrays = [self.h_edge.reshape(-1)]
+        if self.lattice == "square":
+            arrays.append(self.v_edge.reshape(-1))
+        else:
+            arrays.append(self.dl_edge.reshape(-1))
+            arrays.append(self.dr_edge.reshape(-1))
+        flat = np.concatenate(arrays)
+        # 按 _edge_source 取值：三角网的斜边数组里夹着越界占位，边号与下标并不相等
+        self._open_bytes = flat[self._edge_source].astype(np.uint8).tobytes()
+
+    def _expand(self, front: List[int], seen: bytearray) -> List[int]:
+        """从"当前层"推进一层：返回新浸到的节点（并把它们标记进 ``seen``）。
+
+        内层循环是 ``for 邻居, 边号 in _nbr[idx]`` 加两个 ``bytes`` / ``bytearray``
+        下标判断 —— 没有生成器、没有方向判断、没有 numpy 标量索引（旧实现每走一步都要付）。
+        """
+        neighbours = self._nbr
+        opened = self._open_bytes
+        nxt: List[int] = []
+        push = nxt.append
+        for index in front:
+            for neighbour, eid in neighbours[index]:
+                if opened[eid] and not seen[neighbour]:
+                    seen[neighbour] = 1
+                    push(neighbour)
+        return nxt
+
     # ------------------------------------------------------------------
     # 网格构建
     # ------------------------------------------------------------------
@@ -557,44 +722,73 @@ class PercolationGrid:
 
         ``inject == "random"`` 时同时重新随机挑选注水点，因此同一个网格上的
         多次判定结果保持一致，重新生成才会换注水点。
+
+        结构（尺寸 / 格子 / 方向）若被就地改过（界面改尺寸走的就是这条路），这里会
+        **先重建边表、再重抽边** —— 见 :meth:`_ensure_ready`。
         """
         if p is not None:
             self.p = _clamp(float(p), 0.0, 1.0)
         if seed is not None:
-            self.rng = random.Random(seed)
+            self.rng = np.random.default_rng(seed)
             # 主随机源换了，随注水点的随机源也要跟着换，种子才真正可复现
-            self._source_rng = random.Random(self.rng.getrandbits(64))
+            self._source_rng = _derive_rng(self.rng)
 
-        rows, cols, prob, rnd = self.rows, self.cols, self.p, self.rng.random
-        self.h_edge = [[rnd() < prob for _ in range(cols - 1)] for _ in range(rows)]
+        if not self._ensure_ready():        # 结构没变、边没失效 → 自己重抽一遍
+            self._draw_field()
+        return self
+
+    def _draw_field(self) -> None:
+        """按当前 ``p`` 重抽四类边，并重建 ``_open_bytes`` 等派生缓存。"""
+        rows, cols, prob = self.rows, self.cols, self.p
+        # 一次抽满一类边：比逐边 random() 快一个数量级（边号顺序见 _build_edge_table）
+        self.h_edge = self.rng.random((rows, cols - 1)) < prob
 
         if self.lattice == "square":
-            self.v_edge = [[rnd() < prob for _ in range(cols)] for _ in range(rows - 1)]
-            self.dl_edge = []
-            self.dr_edge = []
+            self.v_edge = self.rng.random((rows - 1, cols)) < prob
+            self.dl_edge = np.zeros((0, 0), dtype=bool)
+            self.dr_edge = np.zeros((0, 0), dtype=bool)
         else:
-            self.v_edge = []
-            dl_rows: List[List[bool]] = []
-            dr_rows: List[List[bool]] = []
-            for r in range(rows - 1):
-                shift = r % 2
-                dl_row: List[bool] = []
-                dr_row: List[bool] = []
-                for c in range(cols):
-                    jl, jr = c - 1 + shift, c + shift
-                    dl_row.append(rnd() < prob if 0 <= jl < cols else False)
-                    dr_row.append(rnd() < prob if 0 <= jr < cols else False)
-                dl_rows.append(dl_row)
-                dr_rows.append(dr_row)
-            self.dl_edge = dl_rows
-            self.dr_edge = dr_rows
+            self.v_edge = np.zeros((0, 0), dtype=bool)
+            # 三角网的两条斜边：目标列随行奇偶偏移；越界的位置恒为 False
+            # （与旧实现一致：越界处不算边，但表里保留占位，:func:`encode_edges` 按它输出）
+            shift = (np.arange(rows - 1, dtype=np.intp) % 2)[:, None]
+            columns = np.arange(cols, dtype=np.intp)[None, :]
+            draws = self.rng.random((rows - 1, 2 * cols)) < prob
+            left_target = columns - 1 + shift
+            right_target = columns + shift
+            self.dl_edge = np.where((left_target >= 0) & (left_target < cols),
+                                    draws[:, :cols], False)
+            self.dr_edge = np.where((right_target >= 0) & (right_target < cols),
+                                    draws[:, cols:], False)
+
+        self._refresh_open_edges()
+        self._field_key: Tuple[int, int, str] = (rows, cols, self.lattice)
 
         if self.inject == "random":
             # 延迟到取用时再挑（与点渗流一致）：这样「随机注水」不会额外消耗随机数，
             # 同一颗种子下不同注水方式生成的网格序列完全相同，便于横向比较。
             self._random_source = None
         self._spanning_nodes = None         # 网格换了，贯通判定缓存作废
-        return self
+
+    def _ensure_ready(self) -> bool:
+        """让内部表 / 随机边与当前的 ``rows`` / ``cols`` / ``lattice`` / ``direction`` 对齐。
+
+        返回**是否已经重抽过边**（为 True 时调用方不必再抽一次）。
+
+        界面改尺寸或形状时是**就地**改这些属性、再调 :meth:`regenerate` 的
+        （``ui/tk/kit/base.py`` 的 ``_on_shape_change`` / ``_sync_model_params``）。
+        重构前的内核没有缓存表，怎么改都没事；向量化之后 ``_nbr`` / ``_edge_pairs`` /
+        ``_edge_source`` / ``_last_row_start`` 都是按尺寸预编译的 —— 不在这里对齐，
+        就会拿旧尺寸的表去索引新网格，表现正是"长宽比不为 1 就 IndexError"。
+        """
+        rows, cols = int(self.rows), int(self.cols)
+        key = (rows, cols, self.lattice, self.direction)
+        if key != self._structure_key:
+            self._build_edge_table()                 # 重编几何（顺带刷新末行起点）
+        if (rows, cols, self.lattice) != getattr(self, "_field_key", None):
+            self._draw_field()                       # 边也是按尺寸的：必须重抽
+            return True
+        return False
 
     def total_edge_count(self) -> int:
         """网格中的全部边数（方格网 ``2·rows·cols − rows − cols``）。"""
@@ -606,37 +800,14 @@ class PercolationGrid:
 
     def open_edge_count(self) -> int:
         """实际流通的边数。"""
-        total = sum(sum(row) for row in self.h_edge)
-        if self.lattice == "square":
-            return total + sum(sum(row) for row in self.v_edge)
-        return total + sum(sum(row) for row in self.dl_edge) + sum(sum(row) for row in self.dr_edge)
+        return int(np.count_nonzero(self.h_edge)) + (
+            int(np.count_nonzero(self.v_edge)) if self.lattice == "square"
+            else int(np.count_nonzero(self.dl_edge)) + int(np.count_nonzero(self.dr_edge))
+        )
 
     def iter_all_edges(self) -> Iterator[Tuple[int, int]]:
         """迭代所有边（不论是否流通），返回 (节点a, 节点b)，a < b。"""
-        rows, cols = self.rows, self.cols
-        for r in range(rows):
-            base = r * cols
-            for c in range(cols - 1):
-                yield base + c, base + c + 1
-
-        if self.lattice == "square":
-            for r in range(rows - 1):
-                base = r * cols
-                for c in range(cols):
-                    yield base + c, base + c + cols
-            return
-
-        for r in range(rows - 1):
-            base = r * cols
-            nxt = base + cols
-            shift = r % 2
-            for c in range(cols):
-                jl = c - 1 + shift
-                if 0 <= jl < cols:
-                    yield base + c, nxt + jl
-                jr = c + shift
-                if 0 <= jr < cols:
-                    yield base + c, nxt + jr
+        yield from self._edge_pairs
 
     def is_open(self, a: int, b: int) -> bool:
         """判断节点 a、b 之间的边是否流通（与参数顺序无关）。"""
@@ -667,10 +838,15 @@ class PercolationGrid:
         return False
 
     def iter_open_edges(self) -> Iterator[Tuple[int, int]]:
-        """迭代所有流通边，返回 (节点a, 节点b)。"""
-        for a, b in self.iter_all_edges():
-            if self.is_open(a, b):
-                yield a, b
+        """迭代所有流通边，返回 (节点a, 节点b)。
+
+        直接走"边号表 + 摊平掩码"：遍历全部边时，逐边调 :meth:`is_open` 得先反查边号，
+        而这里正是并查集路径最热的一段循环。
+        """
+        opened = self._open_bytes
+        for eid, pair in enumerate(self._edge_pairs):
+            if opened[eid]:
+                yield pair
 
     # ------------------------------------------------------------------
     # 邻居（受方向模式约束）
@@ -753,7 +929,7 @@ class PercolationGrid:
             return [(rows // 2) * cols + cols // 2]
         if self.inject == "random":
             if self._random_source is None:
-                self._random_source = self._source_rng.randrange(self.node_count)
+                self._random_source = int(self._source_rng.integers(self.node_count))
             return [self._random_source]
         return list(range(cols))
 
@@ -782,13 +958,26 @@ class PercolationGrid:
 
         结果在同一张网格上缓存，重新生成网格后失效。
         """
+        self._ensure_ready()                # 结构若被就地改过，先对齐（否则表与网格对不上）
         if self._spanning_nodes is None:
             self._spanning_nodes = self._scan_span()
         return self._spanning_nodes
 
     def has_spanning_cluster(self) -> bool:
-        """整张网格是否存在**纵贯簇**（等价于 :meth:`spanning_nodes` 非空）。"""
-        return bool(self.spanning_nodes())
+        """整张网格是否存在**纵贯簇**（等价于 :meth:`spanning_nodes` 非空）。
+
+        判据只需要一个"有没有"，所以走**更快的那条路**：把顶行整行当作起点推进一次，
+        看是否到底端。逐簇扫描（:meth:`_scan_span`）留给界面"指出是哪一片"用。
+        两者答案必然一致：顶行各簇的并集到底端 ⟺ 其中某一个簇到底端。
+        """
+        seen = bytearray(self.node_count)
+        front: List[int] = []
+        for index in self.top_row_nodes():
+            seen[index] = 1
+            front.append(index)
+        while front:
+            front = self._expand(front, seen)
+        return any(seen[self._last_row_start:])
 
     def _scan_span(self) -> List[int]:
         """逐簇 BFS：从顶行每个节点出发，返回**第一个**纵贯（顶行 ↔ 底行）的簇。
@@ -797,25 +986,20 @@ class PercolationGrid:
         界面才能把它单独高亮（一次大 BFS 会把互不相连的簇混在一起）。
         方向模式照常生效，所以有向模式得到的是「有向纵贯簇」。
         """
-        rows = self.rows
-        last_row_start = (rows - 1) * self.cols
+        last_row_start = self._last_row_start
         seen = bytearray(self.node_count)
         for start in self.top_row_nodes():
             if seen[start]:
                 continue
-            members: List[int] = []
-            queue: deque = deque([start])
             seen[start] = 1
+            front: List[int] = [start]
+            members: List[int] = []
             reaches_bottom = False
-            while queue:
-                idx = queue.popleft()
-                members.append(idx)
-                if idx >= last_row_start:
+            while front:
+                members.extend(front)
+                if not reaches_bottom and max(front) >= last_row_start:
                     reaches_bottom = True
-                for nb in self.neighbors(idx):
-                    if not seen[nb]:
-                        seen[nb] = 1
-                        queue.append(nb)
+                front = self._expand(front, seen)
             if reaches_bottom:
                 return members          # 这一簇从顶行连到了底行，就是纵贯簇
         return []
@@ -832,42 +1016,34 @@ class PercolationGrid:
         ``origins`` 省略时按 ``inject`` 设定自动挑选注水点；给出时从这些节点出发
         （供界面「点击画布指定注水点」使用）。
         """
+        self._ensure_ready()                # 结构若被就地改过，先对齐（计时不含这一步）
         started = time.perf_counter()
         rows, cols = self.rows, self.cols
         source = list(origins) if origins is not None else self.source_nodes()
-        dist: Dict[int, int] = {}
+        seen = bytearray(self.node_count)
+        front: List[int] = []
+        for index in source:
+            if not seen[index]:
+                seen[index] = 1
+                front.append(index)
+
         layers: List[List[int]] = []
-        queue: deque = deque()
-
-        for idx in source:
-            dist[idx] = 0
-            queue.append(idx)
-
-        last_row_start = (rows - 1) * cols
         percolates = False
-
-        while queue:
-            idx = queue.popleft()
-            d = dist[idx]
-            if d == len(layers):
-                layers.append([])
-            layers[d].append(idx)
-            if idx >= last_row_start:
+        while front:
+            layers.append(list(front))
+            if not percolates and max(front) >= self._last_row_start:
                 percolates = True          # 水已经到达底端
-            nd = d + 1
-            for nb in self.neighbors(idx):
-                if nb not in dist:
-                    dist[nb] = nd
-                    queue.append(nb)
+            front = self._expand(front, seen)
 
+        wet = [index for layer in layers for index in layer]
         spanning = self.spanning_nodes()
-        touches_top = any(idx < cols for idx in dist)
+        touches_top = any(idx < cols for idx in wet)
         return SimResult(
             rows=rows,
             cols=cols,
             p=self.p,
             percolates=percolates,
-            wet=list(dist.keys()),
+            wet=wet,
             layers=layers,
             origins=source,
             spans=bool(spanning),
@@ -885,31 +1061,16 @@ class PercolationGrid:
 
         「面积判据」要的是第一项，「起点判据」要的是后两项，批量统计因此只需跑一遍。
         """
-        rows = self.rows
-        last_row_start = (rows - 1) * self.cols
         source = self.source_nodes() if origins is None else origins
         seen = bytearray(self.node_count)
-        queue: deque = deque()
-        for idx in source:
-            if not seen[idx]:
-                seen[idx] = 1
-                queue.append(idx)
-
-        count = 0
-        touches_top = False
-        touches_bottom = False
-        while queue:
-            idx = queue.popleft()
-            count += 1
-            if idx < self.cols:
-                touches_top = True
-            if idx >= last_row_start:
-                touches_bottom = True
-            for nb in self.neighbors(idx):
-                if not seen[nb]:
-                    seen[nb] = 1
-                    queue.append(nb)
-        return count, touches_top, touches_bottom
+        front: List[int] = []
+        for index in source:
+            if not seen[index]:
+                seen[index] = 1
+                front.append(index)
+        while front:
+            front = self._expand(front, seen)
+        return sum(seen), any(seen[: self.cols]), any(seen[self._last_row_start:])
 
     def spread_size(self, origins: Optional[Sequence[int]] = None) -> int:
         """只统计浸润节点数（面积判据与批量统计的高速路径，不记录分层）。
@@ -955,23 +1116,16 @@ class PercolationGrid:
 
     def _percolates_bfs(self, sources: Sequence[int]) -> bool:
         """轻量 BFS：给定的注水点集合能否到达底端整行（不记录分层）。"""
-        rows, cols = self.rows, self.cols
-        last_row_start = (rows - 1) * cols
         seen = bytearray(self.node_count)
-        queue: deque = deque()
-        for idx in sources:
-            if not seen[idx]:
-                seen[idx] = 1
-                queue.append(idx)
-
-        while queue:
-            idx = queue.popleft()
-            if idx >= last_row_start:
+        front: List[int] = []
+        for index in sources:
+            if not seen[index]:
+                seen[index] = 1
+                front.append(index)
+        while front:
+            if max(front) >= self._last_row_start:
                 return True
-            for nb in self.neighbors(idx):
-                if not seen[nb]:
-                    seen[nb] = 1
-                    queue.append(nb)
+            front = self._expand(front, seen)
         return False
 
     def percolates_bfs(self) -> bool:
@@ -994,7 +1148,7 @@ class PercolationGrid:
 
 
 # 说明：格点在图纸上的单位坐标 ``lattice_layout`` 由两个模型共用，已移到
-# :mod:`awe_math.models._geometry`（本模块保持"只依赖标准库、可单独导入"的性质）。
+# :mod:`awe_math.models._geometry`（本模块保持「可单独导入、可单独运行」的性质）。
 
 
 # ----------------------------------------------------------------------
@@ -1088,6 +1242,115 @@ def batch_percolation_probability(
     )
 
 
+def _scan_curve_by_critical(
+    p_values: Sequence[float],
+    rows: int,
+    cols: Optional[int],
+    trials: int,
+    rng: np.random.Generator,
+    lattice: str,
+    progress: Optional[Callable[[int, int, BatchResult], None]],
+    cancel,
+) -> List[BatchResult]:
+    """贯通判据的"临界 p"单遍扫描：一次试验做一遍并查集扫描，给出整条 P(p) 曲线。
+
+    做法（渗流里的标准技巧）：给每条边抽一个 ``U(0,1)`` 权重、按升序加入并查集；
+    一旦"顶行整行"与"底端整行"连通，**当时那条边的权重就是该试验的临界概率 c**。
+    于是任意 ``p`` 都有 ``P(p) = P(c ≤ p)`` —— 一遍 ``O(E)`` 扫描替代了"每个 p 重跑一遍
+    全部试验"。顺带跟踪顶端簇大小随 ``p`` 的分段常量轨迹，"平均浸润比例"也一并得到
+    （与逐 p 路径的口径一致：都是"注水簇大小 / 节点总数"）。
+
+    只在 ``criterion="span"`` + ``inject="top"`` + ``direction="undirected"`` 时成立，
+    原因写在 :func:`scan_curve` 的说明里。
+
+    注意：整条曲线共用一遍扫描，所以每个结果里的 ``elapsed`` 是**这一遍**的耗时
+    （不是该点的独立耗时）。
+    """
+    grid = PercolationGrid(rows=rows, cols=cols, p=0.5, rng=rng, lattice=lattice,
+                           direction="undirected", inject="top")
+    node_count = grid.node_count
+    pairs = grid._edge_pairs
+    edge_count = len(pairs)
+    top_nodes = list(range(grid.cols))
+    sink_nodes = list(range(grid._last_row_start, node_count))
+    top_virtual, sink_virtual = node_count, node_count + 1
+
+    started = time.perf_counter()
+    critical: List[float] = []
+    #: 只在**请求到的那些 p** 上给顶端簇大小拍快照（不必每加一条边都数一遍）：
+    #: 加边按权重升序进行，所以"走到第一条权重 ≥ p 的边"时，所有权重 < p 的边都已加入 ——
+    #: 那一刻的分量大小正是该 p 下的"浸润节点比例"，与逐 p 路径的口径完全一致。
+    targets = sorted({float(p) for p in p_values})
+    snapshots: List[List[float]] = []
+
+    def top_ratio(current: UnionFind) -> float:
+        """顶端簇占全网格的比例（虚拟节点不计入；已连通时连虚拟出口也扣掉）。"""
+        virtuals = 2 if current.connected(top_virtual, sink_virtual) else 1
+        return max(current.component_size(top_virtual) - virtuals, 0) / node_count
+
+    for _ in range(trials):
+        if cancel is not None and cancel.is_set():
+            break
+        weights = rng.random(edge_count)
+        order = np.argsort(weights, kind="stable")
+
+        uf = UnionFind(node_count + 2)
+        for index in top_nodes:
+            uf.union(top_virtual, index)
+        for index in sink_nodes:
+            uf.union(sink_virtual, index)
+
+        snapshot = [0.0] * len(targets)
+        cursor = 0
+        reached = 1.0
+        connected_done = False
+        for eid in order:
+            weight = float(weights[eid])
+            while cursor < len(targets) and weight >= targets[cursor]:
+                snapshot[cursor] = top_ratio(uf)
+                cursor += 1
+            a, b = pairs[int(eid)]
+            uf.union(a, b)
+            if not connected_done and uf.connected(top_virtual, sink_virtual):
+                reached = weight
+                connected_done = True
+            if connected_done and cursor >= len(targets):
+                break                     # 临界值已拿到、该拍的快照也都拍完了
+        while cursor < len(targets):
+            snapshot[cursor] = top_ratio(uf)
+            cursor += 1
+        critical.append(reached)
+        snapshots.append(snapshot)
+    elapsed = time.perf_counter() - started
+
+    done = len(critical)
+    results: List[BatchResult] = []
+    total_points = len(p_values)
+    for k, p in enumerate(p_values, start=1):
+        success = sum(1 for value in critical if value <= p)
+        ratio_sum = sum(snapshot[targets.index(float(p))] for snapshot in snapshots)
+        res = BatchResult(
+            p=p,
+            rows=grid.rows,
+            cols=grid.cols,
+            trials=done,
+            success=success,
+            criterion="span",
+            threshold=grid.threshold,
+            direction="undirected",
+            lattice=lattice,
+            inject="top",
+            ratio_sum=ratio_sum,
+            elapsed=elapsed,
+        )
+        results.append(res)
+        if progress is not None:
+            progress(k, total_points, res)
+        if cancel is not None and cancel.is_set():
+            break
+    return results
+
+
 def scan_curve(
     p_values: Sequence[float],
     rows: int = 40,
@@ -1106,8 +1369,24 @@ def scan_curve(
 
     progress : callable(done, total, BatchResult) | None
         每完成一个 p 值调用一次。
+
+    **单遍扫描加速**：默认组合（``criterion="span"`` + ``inject="top"`` +
+    ``direction="undirected"``）走 :func:`_scan_curve_by_critical` —— 一次试验做一遍并查集
+    扫描就给出整条曲线，而不是每个 ``p`` 重跑一遍全部试验（实测快约"点数"倍）。其余组合
+    仍走"逐 p 重跑"，因为这三点是单遍扫描成立的前提：
+
+    * 判据要**与注水点无关**（``span`` 满足；``origin`` / ``area`` 不满足）；
+    * 注水点要**与 p 无关**（``top`` 满足；``random`` / ``center`` 的起点本身随 p 变，
+      于是"是否成功"不再随 p 单调，"临界 p"就没有定义）；
+    * 方向必须**无向**：有向模式下"某一顶行节点能沿允许方向到达底行"与"顶行与底行
+      无向连通"**不是一回事**（顶行节点自己也吃左边的入边，不都是源点）。
     """
     rng = _resolve_rng(rng)
+    if criterion == "span" and inject == "top" and direction == "undirected":
+        return _scan_curve_by_critical(
+            p_values, rows=rows, cols=cols, trials=trials, rng=rng,
+            lattice=lattice, progress=progress, cancel=cancel,
+        )
     results: List[BatchResult] = []
     total_points = len(p_values)
     for k, p in enumerate(p_values, start=1):
@@ -1137,13 +1416,13 @@ def encode_edges(grid: "PercolationGrid") -> Dict[str, str]:
 
     相比逐个传边坐标，字符串编码体积小一个数量级，前端解析也只需一次遍历。
     """
-    h = "".join("1" if flag else "0" for row in grid.h_edge for flag in row)
+    def bits(array: "np.ndarray") -> str:
+        chars = np.where(array.reshape(-1), ord("1"), ord("0")).astype(np.uint8)
+        return chars.tobytes().decode("ascii")
+
     if grid.lattice == "square":
-        v = "".join("1" if flag else "0" for row in grid.v_edge for flag in row)
-        return {"h": h, "v": v}
-    dl = "".join("1" if flag else "0" for row in grid.dl_edge for flag in row)
-    dr = "".join("1" if flag else "0" for row in grid.dr_edge for flag in row)
-    return {"h": h, "dl": dl, "dr": dr}
+        return {"h": bits(grid.h_edge), "v": bits(grid.v_edge)}
+    return {"h": bits(grid.h_edge), "dl": bits(grid.dl_edge), "dr": bits(grid.dr_edge)}
 
 
 # ----------------------------------------------------------------------
@@ -1179,7 +1458,7 @@ if __name__ == "__main__":
     print(f"{'方向模式':<16}{'p_c':>9}{'来源':>7} | {'表观交点':>9} | {'P(p_c)':>8} | {'平均比例':>8}")
     print("-" * 78)
 
-    shared_rng = random.Random(20260913)
+    shared_rng = np.random.default_rng(20260913)
     for direction in DIRECTIONS:
         grid = PercolationGrid(rows=40, p=0.5, direction=direction)
         pc = grid.theoretical_pc

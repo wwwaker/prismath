@@ -91,9 +91,10 @@ PARAMS = (
              "注意：经典的「火只往上下左右烧」就是无向模式。",
     ),
     ParamSpec(
-        key="inject", label="注水（起始）方式", kind="choice", default="随机一个占据格",
+        key="inject", label="注水（起始）方式", kind="choice", default="顶端整行占据格",
         choices=tuple(SITE_INJECT_CHOICES), group="高级选项",
-        hint="随机一个占据格 = 经典「随机一棵树起火」；中心附近 / 顶端整行用于对照实验。",
+        hint="顶端整行 = 经典渗流实验（顶行注水、看能否到底端，与 p_c 的判据一致，默认）；"
+             "随机一个占据格 = 经典「随机一棵树起火」；中心附近用于对照实验。",
     ),
     ParamSpec(
         key="trials", label="批量统计次数 N", kind="choice", default="1000",
@@ -124,12 +125,27 @@ ACTIONS = (
 
 
 def _pick(mapping: Dict[str, str], value: Any, fallback: str) -> str:
-    """把界面上的中文选项翻译成模型内部取值（无法识别时回退）。"""
-    return mapping.get(str(value), fallback)
+    """把界面上的中文选项翻译成模型内部取值。
+
+    两种写法都要认：**中文标签**（界面表单直接给出的就是它）与**已经是内部取值**的
+    字符串（分块批量的 payload 会把上一次结果的字段回传，那些字段存的就是内部取值）。
+    早先只查 ``mapping.get(value)``，于是"回传内部取值"会被当成无法识别而落到 fallback ——
+    默认值是 ``random`` 时这个错误刚好被掩盖，换成 ``top`` 就会静默改掉注水方式。
+    """
+    text = str(value)
+    if text in mapping:
+        return mapping[text]
+    if text in mapping.values():
+        return text
+    return fallback
 
 
 def _resolve_seed(value: Any) -> Optional[int]:
-    """把界面传来的种子转成 ``random`` 可用的形式：-1 表示随机。"""
+    """把界面传来的种子转成内核可用的形式（``None | int``）：-1 表示随机。
+
+    内核的随机源是 ``numpy.random.default_rng``，它只接受 ``None`` / 整数 /
+    ``Generator`` —— 传字符串或 ``random.Random`` 会直接抛异常，所以这里必须落成整数。
+    """
     try:
         seed = int(value)
     except (TypeError, ValueError):
@@ -162,7 +178,7 @@ def _options(params: Dict[str, Any]) -> Dict[str, Any]:
         "cols": _resolve_size(params.get("cols"), 30),
         "lattice": _pick(LATTICE_CHOICES, params.get("lattice"), "square"),
         "direction": _pick(DIRECTION_CHOICES, params.get("direction"), "undirected"),
-        "inject": _pick(SITE_INJECT_CHOICES, params.get("inject"), "random"),
+        "inject": _pick(SITE_INJECT_CHOICES, params.get("inject"), "top"),
         "criterion": _pick(CRITERION_CHOICES, params.get("criterion"), DEFAULT_CRITERION),
         "threshold": _resolve_threshold(params.get("threshold")),
     }
@@ -187,7 +203,7 @@ def build_grid(params: Dict[str, Any]) -> SitePercolation:
         rng=params.get("rng"),
         lattice=params.get("lattice", "square"),
         direction=params.get("direction", "undirected"),
-        inject=params.get("inject", "random"),
+        inject=params.get("inject", "top"),
         criterion=params.get("criterion", DEFAULT_CRITERION),
         threshold=_resolve_threshold(params.get("threshold")),
     )
@@ -343,7 +359,7 @@ def _cli(raw_args) -> int:
         direction = "no_up" if getattr(args, "directed", False) else "undirected"
     inject = getattr(args, "inject", None)
     if inject not in SITE_INJECT_CHOICES.values():
-        inject = "random"
+        inject = "top"
     criterion = getattr(args, "criterion", None)
     if criterion not in CRITERIA:
         criterion = DEFAULT_CRITERION

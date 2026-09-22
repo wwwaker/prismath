@@ -15,7 +15,9 @@
 python main.py
 ```
 
-不需要安装任何第三方包（tkinter 是 Python 自带的）；装了 `matplotlib` 才会有右侧的 P(p) 曲线页。
+**依赖 `numpy`**：所有模型的计算内核都基于 numpy 向量化，所以先
+`pip install -r requirements.txt`。`matplotlib` 仍是可选的（只影响曲线页，缺失时该页给出提示，
+其余功能照常）；tkinter 随 Python 自带。
 
 ---
 
@@ -124,6 +126,9 @@ python main.py
 
 ```
 main.py                          唯一入口（转发给 launcher）
+requirements.txt                 依赖声明：numpy（必需）/ matplotlib（可选，曲线页）
+docs/                            架构与 UI 评审文档（面向开发者，含依赖策略 §2.4）
+tests/                           回归网：金样本 + 单元测试 + 微基准（见下文「测试与基准」）
 awe_math/
 ├── spec.py                      模型元数据规范：参数 / 动作 / 视图
 ├── registry.py                  模型注册表 + 「一个模型长什么样」的目录约定
@@ -139,7 +144,7 @@ awe_math/
 │   │   └── views/tk.py          桌面视图（继承 ChartViewBase，只有声明没有绘图代码）
 │   ├── life_game/               生命游戏（栅格类：栅格图元 + 时间轴播放 + 点击涂改）
 │   │   ├── __init__.py          register(spec)：导入本包即完成注册
-│   │   ├── model.py             纯计算内核（字节棋盘 + 邻居表 + 周期检测 + 图案库）
+│   │   ├── model.py             纯计算内核（numpy 布尔棋盘 + 规则查找表 + 周期检测 + 图案库）
 │   │   ├── spec.py              参数 / 动作 / view / cli_options / factory / 密度扫描
 │   │   └── views/tk.py          桌面视图（继承 ChartViewBase，用 kind="grid" 栅格）
 │   ├── percolation/             边渗流
@@ -173,12 +178,67 @@ awe_math/
 
 **三条硬规则**（改代码时请遵守）：
 
-1. `model.py` **只依赖标准库**，不要 import 界面代码——纯计算要能单独导入、单独测试；
+1. `model.py` **只依赖标准库 + numpy**，不要 import 界面代码——纯计算要能单独导入、单独测试，
+   并且四个内核都支持**直接运行**（`python -m awe_math.models.<模型>.model` 跑自检）；
 2. `views/` **只被对应后端懒加载**：不要在模型的 `__init__.py` 里 import 它，否则网页服务、
    终端模式会被迫加载 tkinter / matplotlib；
 3. **界面骨架按后端放**（`ui/<后端>/`），**模型特化跟着模型走**
    （`models/<模型包>/views/<后端>.py`）——所以新增界面后端不必回头改模型，新增模型也不必
    改界面。
+
+### 依赖规则（**numpy 是必需依赖**）
+
+数值内核（元胞自动机演化、渗流单遍扫描、蒙特卡洛批量采样、分形逃逸时间）全部基于
+`numpy` 向量化，因此 **`numpy` 是必需依赖**：
+
+| 依赖 | 必需？ | 作用 |
+| --- | --- | --- |
+| `numpy` | **必需** | 全部模型的计算内核（向量化演化 / 批量统计 / 并查集扫描 / 随机场） |
+| `matplotlib` | 可选 | 曲线页（渗流的 P(p) 曲线等）；缺失时该页显示提示，其余功能照常 |
+| `pywebview` | 可选 | 网页后端想要独立窗口时用（web 后端已暂时弃用） |
+
+安装：`pip install -r requirements.txt`。
+
+**为什么不再写"标准库回退"**：同一个算法维护两套实现，成本与"两套答案不一致"的风险
+（浮点差异、RNG 差异）都高于 numpy 带来的收益，代码也因此更短更直白。取而代之的三条纪律：
+
+1. **语义不变**：重写只许换实现、不许换定义 —— 每个模型内置的自检（`python -m
+   awe_math.models.<模型>.model`）必须继续全绿；
+2. **实测进文档**：重写后要重新标定并把数字写回 docstring / README（本仓库的惯例是
+   **性能数字必须是实测值**，不许估算）；
+3. **入口友好报错**：缺 `numpy` 时提示 `pip install -r requirements.txt`，而不是抛 ImportError 堆栈。
+
+`views/` 的**懒加载**照旧保留 —— 它不再是"为了省依赖"，而是为了让终端模式不被 tkinter 拖累。
+
+**新增依赖前先问一句"标准库真的做不到吗"**：能用标准库就别引包，引包只为止损
+（性能瓶颈或标准库确实没有的能力，例如数值数组、图像编解码）。
+
+---
+
+## 测试与基准
+
+```powershell
+python -m unittest discover -s tests -t .     # 全量测试（当前 95 条，约 30 s）
+python -m tests.bench                         # 四个模型的微基准（中位数 + 波动 + 环境行）
+python -m tests.bench life_game               # 只跑一个模型
+python -m tests._harness --update <模型>      # 重新生成金样本（谨慎，见下）
+```
+
+四层网，各管一件事：
+
+| 文件 | 管什么 |
+| --- | --- |
+| `tests/test_golden.py` + `tests/golden/<模型>.txt` | **金样本**：四个模型的 `python -m awe_math.models.<模型>.model` 自检输出**逐字比对**。自检输出是确定性的（连跑两次逐字相同），所以能用最严格的方式比 —— 改内核后这里变红，先问"这个变化是有意的吗" |
+| `tests/test_life_game.py` 等四份单元测试 | 教材结论与契约断言：纯整数结论（方块 / 闪烁器 / 脉冲星 / 滑翔机位移）**精确相等**；统计量**固定种子 + 容差**。渗流的两份还带**等价性护栏**：邻居/边表必须与几何逐条一致、向量化推进必须与朴素 BFS 同集合同分层、并查集与 BFS 必须同答案、`bytes` 掩码必须与分类型边表互相对得上 |
+| `tests/test_views_smoke.py` | **视图无头冒烟**：按外壳的真实路径真开一个窗口、建出视图，断言画布上真有图元（没有图形环境时自动跳过）。这一层专盯"骨架与内核之间的参数契约" —— 内核测试一个窗口都不建，所以漏过一次"进模型一片空白"（见 `docs` §6.2） |
+| `tests/bench.py` | 微基准 —— **文档里所有性能数字的唯一来源**（中位数 + 预热 + 波动范围） |
+| `tests/_harness.py` | 金样本读写 + 差异报告 + `--update`；每次刷新都要在文件顶部写一句"为什么"（已有 life_game / buffon_needle / site_percolation / percolation 四条记录） |
+
+两条纪律：**性能数字只写实测值并注明复现命令**；波动大的用例（例如小 N 的投针、Windows 上的单代计时）
+不要往文档里写 —— `bench` 会把波动一并打出来，就是为了让人一眼看出哪个数字不可信。
+
+金样本是**允许刷新**的：改 RNG、改算法都会让数字变，这时要刷新 + 写原因；但"纯整数结论"那一批
+（滑翔机坐标、p_c 表的方向性、判据之间的大小关系）不该跟着变 —— 若它们变了，是语义被改了，不是噪声。
 
 ---
 
@@ -190,7 +250,7 @@ awe_math/
 ```
 awe_math/models/<模型包>/
     __init__.py     # register(build_spec())
-    model.py        # 投针几何 + Monte Carlo 估计（纯计算，只 import 标准库）
+    model.py        # 投针几何 + Monte Carlo 估计（纯计算，只 import 标准库 + numpy）
     spec.py         # 参数（针长 / 线距 / 投针根数 / 重复组数）、动作、view="buffon_needle"
     views/
         tk.py       # 可选：桌面视图，@register_view("<spec.view>")
@@ -279,11 +339,15 @@ class BuffonNeedleView(ChartViewBase):
 
 ## 环境要求
 
-| 依赖 | 说明 |
-| --- | --- |
-| Python | 3.9+（开发与实测环境：3.13.9 / Anaconda） |
-| tkinter | Python 自带；部分 Linux 发行版需另装 `python3-tk` |
-| matplotlib | **可选**，只有 P(p) 曲线页需要；缺失时该页显示提示，其余功能照常 |
+| 依赖 | 必需？ | 说明 |
+| --- | --- | --- |
+| Python | **必需** | 3.9+（开发与实测环境：3.13.9 / Anaconda） |
+| numpy | **必需** | 全部模型的计算内核（向量化）；缺了跑不起来 |
+| tkinter | **必需**（桌面窗口） | Python 自带；部分 Linux 发行版需另装 `python3-tk` |
+| matplotlib | 可选 | 曲线页（渗流的 P(p) 曲线等）；缺失时该页显示提示，其余功能照常 |
+| pywebview | 可选 | 网页后端想要独立窗口时用；缺失时用浏览器打开（web 后端已暂时弃用） |
+
+一次装齐：`pip install -r requirements.txt`。
 
 ---
 

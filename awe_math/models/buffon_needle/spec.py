@@ -120,7 +120,11 @@ def _resolve_repeats(value: Any) -> int:
 
 
 def _resolve_seed(value: Any) -> Optional[int]:
-    """把界面传来的种子转成 ``random`` 可用的形式：-1 表示随机。"""
+    """把界面传来的种子转成内核可用的形式（``None | int``）：-1 表示随机。
+
+    内核的随机源是 ``numpy.random.default_rng``，它只接受 ``None`` / 整数 /
+    ``Generator`` —— 传字符串或 ``random.Random`` 会直接抛异常，所以这里必须落成整数。
+    """
     try:
         seed = int(float(value))
     except (TypeError, ValueError):

@@ -19,22 +19,30 @@
 
 实现要点（为什么这样写）
 ------------------------
-1. **字节数组 + 一圈永久死边框**：棋盘存成 ``(rows+2) × (cols+2)`` 的 ``bytearray``，最外圈
-   永不写入、恒为 0。于是"死边界"天然正确，而"环面"只需让邻居下标取模绕回内部 ——
-   **两种边界共用同一段内循环**，热路径里没有分支。
-2. **预计算邻居表**：每个格子的 8 个邻居（填成 padded 下标）在建表时算完，逐代循环里就是
-   8 次加法（``cells[a]+…+cells[h]``），没有取模、没有元组遍历。
-3. **一代一次分配**：每代新建一个 ``bytearray`` 并整体替换，天然满足"同时更新"的语义，
+1. **numpy 向量化**：棋盘是一块 ``(rows, cols)`` 的 ``bool`` 数组，一代就是"补一圈边框 +
+   8 次整块切片求和 + 查两张表"—— **没有逐格 Python 循环**。规则编译成 9 元查找表
+   （下标 = 邻居数）而不是用 ``np.isin``，于是任意 ``born`` / ``survive`` 组合都走同一条路径。
+2. **一次性补边框，两种边界共用一条求和路径**：先把棋盘放进 ``(rows+2, cols+2)`` 的零数组 ——
+   "死边界"到此为止（外圈恒 0，天然正确）；"环面"再把外圈用**对边赋值**填上（四条边 + 四个角）。
+   随后两种边界走**同一段** 8 次切片求和，热路径里没有分支、没有取模。
+3. **一代一次分配**：每代新建一块数组整体替换，天然满足"同时更新"的语义，
    不需要"先算全部再写回"的两遍扫描。
-4. **周期检测用状态哈希**：``hash(bytes(cells))`` 作为键，只存"状态 -> 首次出现的代数"，
-   内存 O(存活代数) 而不是 O(代数 × 棋盘)。
+4. **周期检测用状态哈希**：``hash(packbits(alive))`` 作为键（先压到 1/8 体积再哈希），
+   只存"状态 -> 首次出现的代数"，内存 O(存活代数) 而不是 O(代数 × 棋盘)。
 
-实测（Windows / Python 3.13，标准规则，密度 0.3）
-----------------------------------------------
-50×50 每代 **0.5 ms**、80×80 每代 **1.3 ms**、120×120 每代 **3.1 ms** ——
-逐代播放（最小间隔 20 ms）绰绰有余；配上界面侧的差分刷新，50×50 的每帧总开销约 4 ms。
+实测（Windows / Python 3.13，标准规则，密度 0.30，中位数）
+--------------------------------------------------------
+复现命令：``python -m tests.bench life_game``
 
-本模块**只依赖 Python 标准库**，可单独导入使用（不含任何绘图 / GUI 代码）：
+* 50×50 每代 **46 µs**、120×120 每代 **133 µs**；
+* 50×50 连推 300 代（含 census 与周期检测）**15.2 ms**；
+* 30×30 的"密度 5 点 × 12 次 × 200 代"扫描 **207 ms**；
+* 对照同一台机器上的旧字节数组实现（0.50 ms / 3.04 ms / 199 ms / 1.47 s）：
+  单代约快 **15–23×**，扫描快 **7×** —— 扫描提升较小是因为它还要付 Python 侧的
+  逐代记账（编码、census、周期检测），这部分不随向量化变快。
+
+本模块只依赖标准库 + ``numpy``。numpy 现在是**必需依赖**：内核统一向量化，不再维护
+"标准库回退实现"（见 README 的「依赖规则」）。不含任何绘图 / GUI 代码，可单独导入：
 
     python -m awe_math.models.life_game.model     # 跑一段教科书结论自检
 """
@@ -42,10 +50,11 @@
 from __future__ import annotations
 
 import math
-import random
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple, Union
+
+import numpy as np
 
 __all__ = [
     "DEFAULT_ROWS",
@@ -179,17 +188,22 @@ PATTERN_LABELS: Dict[str, str] = {
     "r_pentomino": "R 五连块（著名长寿者）",
 }
 
-#: 随机源可以传入 None / int（种子）/ random.Random 实例
-RngLike = Union[None, int, random.Random]
+#: 随机源可以传入 None / int（种子）/ numpy Generator 实例
+RngLike = Union[None, int, np.random.Generator]
 
 
-def _resolve_rng(rng: RngLike = None) -> random.Random:
-    """把 None / 种子 / Random 实例统一转换成一个 ``random.Random`` 对象。"""
-    if isinstance(rng, random.Random):
+def _resolve_rng(rng: RngLike = None) -> np.random.Generator:
+    """把 None / 种子 / Generator 实例统一转换成一个 numpy 随机源。
+
+    用 ``default_rng``（PCG64）而不是旧式 ``RandomState``：同样的种子在同一个 numpy
+    大版本内给出同一条序列，而 ``RandomState`` 只承诺"历史兼容"。
+
+    注意：从 ``random.Random`` 换成 numpy 之后，**同一个种子不再产生同一个开局** ——
+    可复现性只在同一实现内成立（这是本次重构被明确接受的代价之一）。
+    """
+    if isinstance(rng, np.random.Generator):
         return rng
-    if rng is None:
-        return random.Random()
-    return random.Random(rng)
+    return np.random.default_rng(rng)
 
 
 def _clamp_int(value: Any, low: int, high: int, fallback: int) -> int:
@@ -405,11 +419,9 @@ class LifeBoard:
 
         self.generation = 0
         self.population = 0
-        #: 棋盘数据：``(rows+2) × (cols+2)``，最外圈永久为 0（见模块说明）
-        self._cells = bytearray((self.rows + 2) * (self.cols + 2))
-        self._interior: List[int] = []
-        self._offsets: List[Tuple[int, ...]] = []
-        self._build_neighbours()
+        #: 棋盘数据：``(rows, cols)`` 的布尔数组（``True`` = 活）
+        self._alive = np.zeros((self.rows, self.cols), dtype=bool)
+        self._build_rule_tables()
 
         self.seed_board(self.pattern, self.density)
 
@@ -449,38 +461,21 @@ class LifeBoard:
         """当前存活密度。"""
         return self.population / self.node_count if self.node_count else 0.0
 
-    # ---------------- 邻居表 ----------------
-    def _build_neighbours(self) -> None:
-        """预计算每个格子的 8 个邻居（padded 下标）；两种边界共用同一段内循环。
+    # ---------------- 规则查找表 ----------------
+    def _build_rule_tables(self) -> None:
+        """把 ``born`` / ``survive`` 编译成两张 9 元查找表（下标 = 邻居数）。
 
-        环面：邻居下标对行列取模绕回内部；死边界：界外的邻居**不加入**计数，
-        不足 8 个时用下标 0 补齐 —— 0 号格子属于那一圈永久为 0 的边框，不影响计数。
+        用查找表而不是 ``np.isin``：任意规则都走同一条向量化路径，而每次判定只是
+        一次内存读取 —— 这是"规则可配置"与"快"之间最省事的折中。
         """
-        rows, cols = self.rows, self.cols
-        stride = cols + 2
-        torus = self.boundary == BOUNDARY_TORUS
-        interior: List[int] = []
-        offsets: List[Tuple[int, ...]] = []
-        for row in range(rows):
-            for col in range(cols):
-                interior.append((row + 1) * stride + (col + 1))
-                around: List[int] = []
-                for dr in (-1, 0, 1):
-                    for dc in (-1, 0, 1):
-                        if dr == 0 and dc == 0:
-                            continue
-                        rr, cc = row + dr, col + dc
-                        if torus:
-                            rr %= rows
-                            cc %= cols
-                        elif not (0 <= rr < rows and 0 <= cc < cols):
-                            continue
-                        around.append((rr + 1) * stride + (cc + 1))
-                while len(around) < 8:      # 死边界：用恒为 0 的边框下标补齐
-                    around.append(0)
-                offsets.append(tuple(around))
-        self._interior = interior
-        self._offsets = offsets
+        self._born_lut = np.zeros(9, dtype=bool)
+        self._survive_lut = np.zeros(9, dtype=bool)
+        for count in self.rule.born:
+            if 0 <= count <= 8:
+                self._born_lut[count] = True
+        for count in self.rule.survive:
+            if 0 <= count <= 8:
+                self._survive_lut[count] = True
 
     def resize(self, rows: Optional[int] = None, cols: Optional[int] = None) -> None:
         """改变棋盘尺寸（内容丢弃，按当前开局重排）。"""
@@ -489,8 +484,7 @@ class LifeBoard:
         if (new_rows, new_cols) == (self.rows, self.cols):
             return
         self.rows, self.cols = new_rows, new_cols
-        self._cells = bytearray((new_rows + 2) * (new_cols + 2))
-        self._build_neighbours()
+        self._alive = np.zeros((new_rows, new_cols), dtype=bool)
         self.seed_board(self.pattern, self.density)
 
     def configure(self, rule: Optional[Union[str, LifeRule]] = None,
@@ -499,7 +493,8 @@ class LifeBoard:
         """更新规则 / 边界 / 密度，但**保留棋盘上现有的细胞**。
 
         界面上的玩法是"先画好开局，再改规则或边界，然后继续演化"，所以这些参数不能像
-        重建那样把画面清掉。改动边界要重建邻居表（绕行关系变了），改动规则只需换集合。
+        重建那样把画面清掉。改动规则要重建查找表；改动边界什么都不用重建
+        （边框是每一代现补的，没有预计算表）。
         返回是否真的发生了改动。
         """
         changed = False
@@ -507,6 +502,7 @@ class LifeBoard:
             new_rule = rule if isinstance(rule, LifeRule) else LifeRule.parse(rule)
             if new_rule != self.rule:
                 self.rule = new_rule
+                self._build_rule_tables()
                 changed = True
         if density is not None:
             value = min(1.0, max(0.0, float(density)))
@@ -514,21 +510,14 @@ class LifeBoard:
                 self.density = value
                 changed = True
         if boundary in BOUNDARIES and boundary != self.boundary:
-            self.boundary = boundary
-            self._build_neighbours()      # 环面 / 死边界的绕行关系不同，邻居表必须重建
+            self.boundary = boundary      # 边框是每一代现补的，没有预计算表要重建
             changed = True
         return changed
-
-    # ---------------- 下标换算 ----------------
-    def _padded(self, index: int) -> int:
-        """内部下标 ``r*cols+c`` -> 棋盘数组下标（跳过永久为 0 的边框）。"""
-        row, col = divmod(int(index), self.cols)
-        return (row + 1) * (self.cols + 2) + (col + 1)
 
     # ---------------- 开局 ----------------
     def clear(self) -> None:
         """清空棋盘（全死），代数归零。"""
-        self._cells = bytearray(len(self._cells))
+        self._alive[:] = False
         self.generation = 0
         self.population = 0
 
@@ -537,15 +526,13 @@ class LifeBoard:
         if density is not None:
             self.density = min(1.0, max(0.0, float(density)))
         random_source = self.rng if rng is None else _resolve_rng(rng)
-        threshold = self.density
-        cells = self._cells
-        for index in self._interior:
-            cells[index] = 1 if random_source.random() < threshold else 0
+        # 一次抽满整块棋盘（行优先），比逐格 random() 快两个数量级
+        self._alive = random_source.random((self.rows, self.cols)) < self.density
         self.generation = 0
         self._recount()
 
     def place(self, pattern: str, clear: bool = True) -> None:
-        """把预置图案居中放在棋盘上（``clear=True`` 时先清空）。"""
+        """把预置图案居中放在棋盘上（``clear=True`` 时先清空；放不下就按边界裁掉）。"""
         rows = PATTERNS.get(pattern)
         if clear:
             self.clear()
@@ -554,14 +541,11 @@ class LifeBoard:
         height, width = len(rows), max(len(row) for row in rows)
         top = max(0, (self.rows - height) // 2)
         left = max(0, (self.cols - width) // 2)
-        cells = self._cells
-        for r, line in enumerate(rows):
-            for c, char in enumerate(line):
-                if char not in ("O", "o", "1", "#"):
-                    continue
-                rr, cc = top + r, left + c
-                if 0 <= rr < self.rows and 0 <= cc < self.cols:
-                    cells[(rr + 1) * (self.cols + 2) + (cc + 1)] = 1
+        mask = np.array([[char in ("O", "o", "1", "#") for char in line.ljust(width)]
+                         for line in rows], dtype=bool)
+        target = self._alive[top:top + height, left:left + width]
+        if target.size:
+            target[:] = mask[: target.shape[0], : target.shape[1]]
         self.generation = 0
         self._recount()
 
@@ -583,20 +567,19 @@ class LifeBoard:
             self.randomize(density)
 
     def _recount(self) -> None:
-        cells = self._cells
-        self.population = sum(cells[index] for index in self._interior)
+        self.population = int(np.count_nonzero(self._alive))
 
     # ---------------- 读写单个格子（供点击编辑） ----------------
     def is_alive(self, index: int) -> bool:
-        return bool(self._cells[self._padded(index)])
+        row, col = divmod(int(index), self.cols)
+        return bool(self._alive[row, col])
 
     def set_cell(self, index: int, alive: bool) -> None:
         """设置某个格子的状态（不改变代数：编辑的是"当前这一代"的棋盘）。"""
-        padded = self._padded(index)
-        was = self._cells[padded]
-        now = 1 if alive else 0
-        if was != now:
-            self._cells[padded] = now
+        row, col = divmod(int(index), self.cols)
+        now = bool(alive)
+        if bool(self._alive[row, col]) != now:
+            self._alive[row, col] = now
             self.population += 1 if now else -1
 
     def toggle(self, index: int) -> bool:
@@ -606,52 +589,76 @@ class LifeBoard:
         return alive
 
     def load(self, text: str) -> None:
-        """按 0/1 字符串装载棋盘（与 :meth:`encode` 互为逆运算，不改变代数）。"""
-        cells = self._cells
-        alive = 0
-        for index, char in enumerate(str(text)[: self.node_count]):
-            padded = self._padded(index)
-            value = 1 if char == "1" else 0
-            cells[padded] = value
-            alive += value
-        self.population = alive
+        """按 0/1 字符串装载棋盘（与 :meth:`encode` 互为逆运算，不改变代数）。
+
+        只覆盖字符串给出的那些格子（比棋盘短时其余保持原样），最后按**整块棋盘**重数
+        活细胞 —— 于是"传进来半张棋盘"也不会让 :attr:`population` 与实际状态对不上。
+        """
+        values = np.frombuffer(str(text)[: self.node_count].encode("ascii", "replace"),
+                               dtype=np.uint8)
+        self._alive.reshape(-1)[: values.size] = values == ord("1")
+        self._recount()
 
     def encode(self) -> str:
-        """把棋盘压成 0/1 字符串（前端一次遍历即可还原）。"""
-        return "".join("1" if self._cells[index] else "0" for index in self._interior)
+        """把棋盘压成 0/1 字符串（前端一次遍历即可还原）。
+
+        走"字节数组 -> 字符串"（``np.where`` + ``tobytes``）而不是逐格拼字符：
+        50×50 就是一次 2500 字节的转换。
+        """
+        chars = np.where(self._alive.reshape(-1), ord("1"), ord("0")).astype(np.uint8)
+        return chars.tobytes().decode("ascii")
 
     def alive_indices(self) -> List[int]:
         """所有活细胞的下标（单位坐标，``r*cols+c``）。"""
-        cells = self._cells
-        return [index for index, padded in enumerate(self._interior) if cells[padded]]
+        return [int(index) for index in np.flatnonzero(self._alive.reshape(-1))]
 
     def state_key(self) -> int:
-        """状态指纹（用于周期检测）。用 ``bytes`` 的 64 位哈希，而不是整块状态比对。"""
-        return hash(bytes(self._cells))
+        """状态指纹（用于周期检测）：压成位图再取 64 位哈希，不做整块状态比对。
+
+        ``packbits`` 把 ``rows×cols`` 个布尔压到 1/8 体积（50×50 只剩 313 字节），
+        哈希开销与内存随之下降；位序由 ``packbits`` 固定（大端、行优先），
+        所以同一个状态永远得到同一个指纹。
+        """
+        return hash(np.packbits(self._alive).tobytes())
 
     # ---------------- 演化 ----------------
     def step(self) -> LifeStep:
-        """演化一代（原地），返回本代的新生 / 死亡 / 活细胞数。"""
+        """演化一代（原地），返回本代的新生 / 死亡 / 活细胞数。
+
+        整代只有几步数组运算：补边框 -> 8 次整块切片相加 -> 两张查找表判定。
+        **没有逐格 Python 循环**，所以耗时与棋盘面积成正比，而与"当前有多少活细胞"
+        无关（对极稀疏的开局反而不如逐格循环"省"，换来的是可预测的上限）。
+        """
         started = time.perf_counter()
-        cells = self._cells
-        new = bytearray(len(cells))
-        born, survive = self.rule.born, self.rule.survive
-        births = deaths = population = 0
-        for index, offsets in zip(self._interior, self._offsets):
-            a, b, c, d, e, f, g, h = offsets
-            neighbours = (cells[a] + cells[b] + cells[c] + cells[d]
-                          + cells[e] + cells[f] + cells[g] + cells[h])
-            if cells[index]:
-                if neighbours in survive:
-                    new[index] = 1
-                    population += 1
-                else:
-                    deaths += 1
-            elif neighbours in born:
-                new[index] = 1
-                births += 1
-                population += 1
-        self._cells = new
+        alive = self._alive
+        rows, cols = self.rows, self.cols
+
+        # 一次性补一圈边框：死边界到此为止（外圈恒 0，天然正确）；环面则把四条边与
+        # 四个角用"对边"赋值填上。随后两种边界走**同一段** 8 次切片求和，热路径无分支。
+        padded = np.zeros((rows + 2, cols + 2), dtype=np.uint8)
+        padded[1:-1, 1:-1] = alive
+        if self.boundary == BOUNDARY_TORUS:
+            padded[0, 1:-1] = alive[-1]
+            padded[-1, 1:-1] = alive[0]
+            padded[1:-1, 0] = alive[:, -1]
+            padded[1:-1, -1] = alive[:, 0]
+            padded[0, 0] = alive[-1, -1]
+            padded[0, -1] = alive[-1, 0]
+            padded[-1, 0] = alive[0, -1]
+            padded[-1, -1] = alive[0, 0]
+
+        neighbours = (padded[0:rows, 0:cols] + padded[0:rows, 1:cols + 1]
+                      + padded[0:rows, 2:cols + 2] + padded[1:rows + 1, 0:cols]
+                      + padded[1:rows + 1, 2:cols + 2] + padded[2:rows + 2, 0:cols]
+                      + padded[2:rows + 2, 1:cols + 1] + padded[2:rows + 2, 2:cols + 2])
+
+        new = ((self._born_lut[neighbours] & ~alive)
+               | (self._survive_lut[neighbours] & alive))
+        births = int(np.count_nonzero(new & ~alive))
+        deaths = int(np.count_nonzero(alive & ~new))
+        population = int(np.count_nonzero(new))
+
+        self._alive = new
         self.generation += 1
         self.population = population
         return LifeStep(self.generation, births, deaths, population,
@@ -753,7 +760,7 @@ class DensityResult:
 
 
 def _sample_density(rows: int, cols: int, density: float, generations: int,
-                    boundary: str, rule: str, rng: random.Random) -> Tuple[bool, bool, int, int]:
+                    boundary: str, rule: str, rng: np.random.Generator) -> Tuple[bool, bool, int, int]:
     """一次实验：返回 ``(是否有活细胞, 是否收敛到周期, 末态活细胞数, 收敛代数)``。"""
     board = LifeBoard(rows=rows, cols=cols, rule=rule, boundary=boundary,
                       density=density, rng=rng, pattern="random")
@@ -889,21 +896,21 @@ if __name__ == "__main__":
     #    大棋盘上"等到它重复"可能比宇宙寿命还久 —— 所以下面要分成两组来看。
     settled = []
     for seed in range(1, 9):
-        small = LifeBoard(rows=12, cols=12, density=0.5, rng=random.Random(seed))
+        small = LifeBoard(rows=12, cols=12, density=0.5, rng=seed)
         small_run = small.run(3000)
         assert small_run.outcome in (OUTCOME_EXTINCT, OUTCOME_STATIC, OUTCOME_CYCLE), \
             f"12×12 环面第 {seed} 号实验应当收敛"
         settled.append(small_run.stop_generation)
     print(f"环面 12×12 × 8 次   : 全部收敛，收敛代数 {settled}")
 
-    big = LifeBoard(rows=20, cols=20, density=0.3, rng=random.Random(7))
+    big = LifeBoard(rows=20, cols=20, density=0.3, rng=7)
     run_big = big.run(600)
     print(f"环面 20×20（600 代）: 结局 = {run_big.outcome_label} "
           f"（瞬态可以远超我们愿意等的时间，这正是 2^400 个状态的威力）")
 
     # 9. 密度扫描：极低密度会消亡、极高密度会僵化
     table = scan_survival((0.05, 0.10, 0.30, 0.60, 0.90), rows=30, generations=200,
-                          trials=12, rng=random.Random(20260915))
+                          trials=12, rng=20260915)
     print("\n初始密度 -> 长期结局（30×30，200 代，每点 12 次）")
     print(f"{'密度':>6}{'存活率':>10}{'收敛率':>10}{'平均末态活细胞':>16}{'平均收敛代数':>14}")
     print("-" * 70)

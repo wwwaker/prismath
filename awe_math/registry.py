@@ -18,7 +18,7 @@
 
     awe_math/models/<模型包>/
         __init__.py        # register(ModelSpec(...))，导入本包即完成注册
-        model.py           # 纯计算内核（只依赖标准库，不要 import 界面）
+        model.py           # 纯计算内核（只依赖标准库 + numpy，不要 import 界面）
         spec.py            # 参数 / 动作 / view="<渲染器名>"
         cli.py             # 可选：终端模式的入口（spec.cli）
         views/

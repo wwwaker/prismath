@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import json
 import queue
-import random
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -424,8 +423,11 @@ class PercolationViewBase(JobsMixin, SidebarMixin, ResultPanelMixin, CanvasMixin
         init_threshold = float(defaults.get("threshold", FALLBACK_THRESHOLD) or FALLBACK_THRESHOLD)
 
         # ---------------- 模型与状态 ----------------
+        # rng=None：交给内核自己的默认随机源（每次进模型都是一个新开局）。
+        # 别在这里自己造随机数对象 —— 内核只接受 None / int / numpy Generator，
+        # 传 ``random.Random()`` 会在 ``default_rng`` 里直接抛异常，窗口就只剩空壳。
         self.model = self._create_model(
-            rows=init_rows, cols=init_cols, p=init_p, rng=random.Random(),
+            rows=init_rows, cols=init_cols, p=init_p, rng=None,
             lattice=init_lattice, direction=init_direction, inject=init_inject,
             criterion=init_criterion, threshold=init_threshold,
         )
