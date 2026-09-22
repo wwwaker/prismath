@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from awe_math.models.n_body.model import (
+from prismath.models.n_body.model import (
     FIGURE_EIGHT_PERIOD,
     GRAVITY,
     MIN_MASS,
@@ -37,8 +37,8 @@ from awe_math.models.n_body.model import (
     encode_positions,
     scan_drift,
 )
-from awe_math.models import n_body  # noqa: F401  导入即注册模型
-from awe_math.registry import get
+from prismath.models import n_body  # noqa: F401  导入即注册模型
+from prismath.registry import get
 
 try:                                                    # pragma: no cover
     import tkinter as tk
@@ -264,7 +264,7 @@ class SpecTest(unittest.TestCase):
         cls.spec = get("n_body")
 
     def test_options_from_ui_translates_chinese_labels(self) -> None:
-        from awe_math.models.n_body.spec import options_from_ui
+        from prismath.models.n_body.spec import options_from_ui
 
         internal = options_from_ui({
             "scenario": "随机星团（混沌）", "stars": 12, "dt": 0.01,
@@ -275,7 +275,7 @@ class SpecTest(unittest.TestCase):
         self.assertAlmostEqual(internal["softening"], 0.2)
 
     def test_build_nbody_falls_back_to_scenario_softening(self) -> None:
-        from awe_math.models.n_body.spec import build_nbody
+        from prismath.models.n_body.spec import build_nbody
 
         cluster = build_nbody({"scenario": SCENARIO_CLUSTER, "softening": None, "seed": 1})
         self.assertGreater(cluster.softening, 0.0, "随机星团需要软化长度")
@@ -283,7 +283,7 @@ class SpecTest(unittest.TestCase):
         self.assertEqual(exact.softening, 0.0, "精确解场景必须用严格牛顿引力")
 
     def test_values_are_clamped(self) -> None:
-        from awe_math.models.n_body.spec import build_nbody
+        from prismath.models.n_body.spec import build_nbody
 
         body = build_nbody({"scenario": SCENARIO_FIGURE_EIGHT, "stars": 10 ** 6,
                             "dt": 99.0, "trail": 10 ** 6, "softening": 99.0})
@@ -366,8 +366,8 @@ class ViewInteractionTest(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        from awe_math.models.n_body.views.tk import NBodyView
-        from awe_math.ui.tk.theme import install_theme
+        from prismath.models.n_body.views.tk import NBodyView
+        from prismath.ui.tk.theme import install_theme
 
         self.root = tk.Tk()
         install_theme(self.root)

@@ -1,7 +1,9 @@
-# 架构与 UI 评审文档（awe_math）
+# 架构与 UI 评审文档（prismath）
 
-> 生成日期：2026-09-15
-> 适用代码版本：已包含 Step 1（P1–P4 修复、`CliArgs`、三层骨架文档同步）
+> 生成日期：2026-09-15　|　最后更新：2026-09-22
+> 适用代码版本：`prismath`（原 `awe_math`，2026-09-22 改名）。覆盖的变更批次：
+> **Step 1**（P1–P4 修复 / `CliArgs` / 三层骨架文档同步）、**Step 2**（栅格范式压测：`kind="grid"` + 生命游戏）、
+> **Step 6**（全模型 numpy 化 + 单遍扫描 + `tests/` 回归网）
 > 阅读对象：本项目后续维护者 / 新增模型或界面后端的开发者
 
 本文档记录项目的**架构现状**、**扩展方式**、**成熟度评估**、**遗留问题清单**与**改进路线**。
@@ -49,7 +51,7 @@ README 面向使用者，本文档面向开发者与后续重构决策。
 
 ```
 main.py                          唯一入口（转发给 launcher）
-awe_math/
+prismath/
 ├── spec.py                      参数 / 动作 / CLI 选项 / 模型元数据规范
 ├── registry.py                  模型注册表 + 「一个模型长什么样」的目录约定
 ├── launcher.py                  入口流程；汇总各模型的 CLI 选项声明
@@ -106,7 +108,7 @@ awe_math/
 
 **三条纪律**（替代原先的"四条底线"）
 
-1. **语义不变**：只换实现、不换定义 —— 每个模型的内置自检（`python -m awe_math.models.<模型>.model`）
+1. **语义不变**：只换实现、不换定义 —— 每个模型的内置自检（`python -m prismath.models.<模型>.model`）
    必须继续全绿，且**已发布的教学结论**（p_c、周期长度、滑翔机 4 代平移 (1,1)…）不许漂移；
 2. **实测进文档**：重写后重新标定，把数字写回 docstring / README / 本文档 ——
    性能数字必须是**实测值**（沿用本项目一贯口径，不许估算）；
@@ -126,7 +128,7 @@ awe_math/
 | --- | --- | --- |
 | 模型注册 | `registry.register` | 模型包 `__init__.py` 里 `register(build_spec())`，导入即注册 |
 | 模型扫描 | `registry.load_models` | 遍历 `models/` 下的子包，跳过 `_` 开头的共用件（`_options` / `_geometry` / `_cli`） |
-| 视图发现 | `kit.discover_views` | 按模板 `VIEW_MODULE_TPL = "awe_math.models.{package}.views.tk"` 尝试导入；`ModuleNotFoundError` 时跳过 |
+| 视图发现 | `kit.discover_views` | 按模板 `VIEW_MODULE_TPL = "prismath.models.{package}.views.tk"` 尝试导入；`ModuleNotFoundError` 时跳过 |
 | 视图登记 | `kit.register_view(key)` | 类装饰器，把视图类挂到 `spec.view == key` 名下 |
 | 视图回落 | `shell.view_for(spec.view) or FallbackView` | 没有专用视图时自动落到通用兜底视图 |
 
@@ -226,6 +228,7 @@ spec.cli(CliArgs(raw_args, MY_OPTIONS))   ← 按「声明」取值
 | 无 tkinter / 无显示 | 交互终端 → `--menu` 菜单；非交互 → 直接跑 CLI 统计，不抛 traceback |
 | 模型没有桌面视图 | 落到 `FallbackView`（参数表单 + 动作按钮 + JSON 结果） |
 | 模型导入失败 | `_add_model_options` 静默跳过，不影响 `--help` / `--list` |
+| 缺 `numpy`（必需依赖） | 入口 `exit_if_missing()` 打印 `pip install -r requirements.txt` 并以退出码 1 结束（`--help` 不受影响）；实现在 `prismath/_deps.py`，见 §7 R11 |
 
 ---
 
@@ -234,7 +237,7 @@ spec.cli(CliArgs(raw_args, MY_OPTIONS))   ← 按「声明」取值
 ### 4.1 新增模型（只加一个目录）
 
 ```
-awe_math/models/<模型包>/
+prismath/models/<模型包>/
     __init__.py     # register(build_spec())
     model.py        # 纯计算，只 import 标准库 + numpy（见 §2.4）
     spec.py         # PARAMS / ACTIONS / handler / cli / cli_options / view
@@ -276,7 +279,7 @@ awe_math/models/<模型包>/
 | 可视化范式覆盖 | 🟡 基本够用 | 栅格 / 热力图已由层 1 的 `kind="grid"` 覆盖（离散态 + 连续场两条渲染路径）；仍缺**图 / 网络**类（见 §8.1） |
 | 界面后端数量 | 🟡 受限 | 实际可用只有 tk；cli 为统计模式；web 已弃用 |
 | 依赖策略 | ✅ 清晰 | `numpy` 必需（全部数值内核向量化）；`matplotlib` / `pywebview` 可选、缺失即提示；依赖一律声明在 `requirements.txt`（见 §2.4） |
-| 测试 | ✅ 成熟 | `tests/`：四个模型自检输出的**金样本逐字比对** + 95 条测试（教材结论精确相等 / 统计量固定种子 + 容差 / 渗流的等价性护栏 / **视图无头冒烟**）+ `tests/bench.py` 微基准；全量约 30 s（重构前 49.3 s，见 §6.2） |
+| 测试 | ✅ 成熟 | `tests/`：**五个模型**自检输出的金样本逐字比对 + **129 条测试**（教材结论精确相等 / 统计量固定种子 + 容差 / 渗流的等价性护栏 / **视图无头冒烟**）+ `tests/bench.py` 微基准；全量约 78 s（`python -m unittest discover -s tests -t .`）。计数随 Step 2 / Step 6 之后的补测增长：Step 6 当时是 88 条 / 31.7 s，其后又补了视图冒烟与 `n_body` 那一批（见 §6.2） |
 
 ---
 
@@ -403,9 +406,9 @@ Step 6 的目标是**彻底优化计算内核**：`numpy` 定为必需依赖（�
 | R6 | `ui/web` 只为 `view == "percolation"` 写了渲染器，且已 `deprecated=True` | `site_percolation` / `buffon_needle` 在 `--ui web` 下退化为通用视图 | 🟡（已弃用，低优先） |
 | R7 | 同一组 `flags` 被两个模型以**不同默认值/类型**声明时，`entries[0]` 静默胜出 | 守卫只覆盖「同 key 不同 flags」，未覆盖「同 flags 不同声明」 | 🟡（已被真实触发：生命游戏的 `--rows` 若复用声明，默认值会被渗流的 40 覆盖；现以 `--cells` 规避。彻底修法见下） |
 | R8 | 不属于当前模型的选项被接受但**静默忽略** | 用户看不出参数没生效（P2 的同类风险，仍是设计取舍） | 🟡（新增例：`--model life --rows 60` 会被接受但忽略 —— 生命游戏读的是 `--cells`） |
-| R9 | 全仓库无测试 | 契约靠文档字符串约束；重构缺少回归保护 | ✅ 已解决：`tests/` 四层网（金样本逐字比对 + 83 条单元测试 + 微基准 + 刷新记录），并在 Step 6 的重构中**实际抓到三个 bug**（见 §6.2） |
+| R9 | 全仓库无测试 | 契约靠文档字符串约束；重构缺少回归保护 | ✅ 已解决：`tests/` 四层网（金样本逐字比对 + 129 条测试 + 微基准 + 刷新记录；计数口径见 §5），并在 Step 6 的重构中**实际抓到三个 bug**（见 §6.2） |
 | R10 | `all_models()` 按 `(topic, order, name)` 字符串排序，中文主题序导致 `buffon_needle` 排第一 | 非交互 `_resolve_model` 的兜底模型是投针；门户按主题分组的展示顺序 | 🟡（观察项，非回归） |
-| R11 | `numpy` 成为必需依赖后**没有任何降级路径** | 环境缺 numpy 时整个工具箱（连 `--list` 都）不可用 | 🟡 部分处理：金样本 + `tests/` 已就位，四个内核都按"同实现内可复现"重建（§6.2）；**仍缺**入口的"缺依赖 → `pip install -r requirements.txt`"友好报错（现在会抛 ImportError 堆栈） |
+| R11 | `numpy` 成为必需依赖后**没有任何降级路径** | 环境缺 numpy 时整个工具箱（连 `--list` 都）不可用 | ✅ 已解决：新增 `prismath/_deps.py`（`missing_required` / `dependency_hint` / `exit_if_missing`），`launcher.main` 与 `ui/tk` 的 `launch()` 各拦一次，缺依赖时打印 `pip install -r requirements.txt` 并以退出码 1 结束。检查置于 `parse_args` **之后**，故 `--help` 仍可用；探测用 `importlib.util.find_spec`（不真 import numpy，启动更快、也不把它自身装坏误报成"没装"）。**顺带修掉**：`_looks_headless` 原先对任何 `ImportError` 都判为"无图形环境"，会把"缺 numpy"误诊成"没有显示" |
 | R12 | `frames[-1]` 与报告指标可能不同代 | `run(generations, max_frames=k)` 触发抽样（`stride > 1`）且未提前收敛时，末帧停在最后一个**采样代**，而 `population` 等指标来自最终代 —— 画面上最多差 `stride` 帧 | 🟡 待定：修法很小（循环后补一帧末态），但属于行为变更，等需求确认再做 |
 | R13 | 三处 `_pick` **只认中文标签**（实现违反自己的契约） | 分块动作的 payload 回传**内部取值**时被当成"无法识别"而落到 fallback，于是注水方式 / 格子 / 方向 / 规则被静默换掉 | ✅ 已修复：三处都改成"标签与内部取值都认"，并各加了一条测试（点渗流最严重 —— 默认值改 `top` 后这个 bug 才会显形） |
 | R14 | `_spread` 与 `spread_stats` 对"未占据的起点"处理不一致 | 前者跳过未占据起点，后者把它算作已到达；正常调用方（`source_nodes`）只给占据格，所以现在看不出来 | 🟡 已文档化、有意保留原语义（Step 6 只换实现不换定义），统一与否待定 |
@@ -428,9 +431,10 @@ Step 6 的目标是**彻底优化计算内核**：`numpy` 定为必需依赖（�
 | 分形 / 连续场（色带 + 缩放） | Mandelbrot | `ChartViewBase(grid)` 的连续场路径 | ⚠️ 图元已就绪，尚无模型验证 |
 | 图 / 网络 | 小世界、六度分隔 | 无 | ❌ 需新骨架（唯一剩下的 ❌） |
 
-**完成门槛**：两个 ❌ 变 ✅，并验证两个 ⚠️。产出不是「更多模型」，而是**骨架集合定型**。
+**完成门槛**：把表中的 ❌ 全部变 ✅，并验证 ⚠️。产出不是「更多模型」，而是**骨架集合定型**。
 栅格那一行已完成，且结论与预期不同：**不需要新骨架**（原设想的 `ImageGridViewBase`）——
 把栅格做成层 1 的一个**图元**即可，代价小、收益大（见 §6.1）。
+**目前只剩一个 ❌：图 / 网络**（原表的两个 ❌ 之一已被栅格消化）。
 
 **剩余待办**：① Mandelbrot（复用连续场路径，几乎零新代码，可顺带验证"色带 + 点击放大"）；
 ② logistic map / Galton 板（两个 ⚠️，层 1 已有 `series` / `bars`，成本低）；
@@ -487,22 +491,23 @@ Step 6 的目标是**彻底优化计算内核**：`numpy` 定为必需依赖（�
 
 | 想了解 | 看这里 |
 | --- | --- |
-| 模型怎么注册、目录约定 | `awe_math/registry.py` |
+| 模型怎么注册、目录约定 | `prismath/registry.py` |
 | 依赖策略（numpy 必需 / 可选依赖 / 懒加载） | 本文档 §2.4 + `requirements.txt` |
-| 参数 / 动作 / CLI 选项 / 元数据规范 | `awe_math/spec.py`（`CliOption` / `CliArgs`） |
-| 入口流程与无图形环境降级 | `awe_math/launcher.py` |
-| 渗流类模型共用的 CLI 声明 | `awe_math/models/_cli.py` |
-| 通用图表骨架（声明式图表 + 动画） | `awe_math/ui/tk/kit/chart.py` |
-| 万能骨架 / 渗流特化骨架 | `awe_math/ui/tk/kit/base.py` |
-| 桌面视图对模型的要求（可执行契约） | `awe_math/ui/tk/kit/protocols.py` |
-| 参数表单怎么由 `spec.params` 生成 | `awe_math/ui/tk/kit/form.py` |
-| 判据的全部界面语义 | `awe_math/ui/tk/kit/criteria.py` |
-| 术语表 / 结果归一化 | `awe_math/ui/tk/kit/common.py` |
-| 视图怎么被自动发现 | `awe_math/ui/tk/kit/__init__.py` |
-| 一个真实渗流模型的完整视图 | `awe_math/models/percolation/views/tk.py` |
-| 一个真实非渗流模型的完整实现（只有声明） | `awe_math/models/buffon_needle/` |
-| 栅格图元、时间轴播放、点击反查怎么做 | `awe_math/ui/tk/kit/chart.py`（模块说明 + `_draw_grid` / `_paint_cells`） |
-| 一个真实栅格类模型的完整实现（内核 + 声明式视图） | `awe_math/models/life_game/` |
+| 缺依赖时入口怎么给出提示（R11） | `prismath/_deps.py`（`exit_if_missing`） |
+| 参数 / 动作 / CLI 选项 / 元数据规范 | `prismath/spec.py`（`CliOption` / `CliArgs`） |
+| 入口流程与无图形环境降级 | `prismath/launcher.py` |
+| 渗流类模型共用的 CLI 声明 | `prismath/models/_cli.py` |
+| 通用图表骨架（声明式图表 + 动画） | `prismath/ui/tk/kit/chart.py` |
+| 万能骨架 / 渗流特化骨架 | `prismath/ui/tk/kit/base.py` |
+| 桌面视图对模型的要求（可执行契约） | `prismath/ui/tk/kit/protocols.py` |
+| 参数表单怎么由 `spec.params` 生成 | `prismath/ui/tk/kit/form.py` |
+| 判据的全部界面语义 | `prismath/ui/tk/kit/criteria.py` |
+| 术语表 / 结果归一化 | `prismath/ui/tk/kit/common.py` |
+| 视图怎么被自动发现 | `prismath/ui/tk/kit/__init__.py` |
+| 一个真实渗流模型的完整视图 | `prismath/models/percolation/views/tk.py` |
+| 一个真实非渗流模型的完整实现（只有声明） | `prismath/models/buffon_needle/` |
+| 栅格图元、时间轴播放、点击反查怎么做 | `prismath/ui/tk/kit/chart.py`（模块说明 + `_draw_grid` / `_paint_cells`） |
+| 一个真实栅格类模型的完整实现（内核 + 声明式视图） | `prismath/models/life_game/` |
 
 ### 术语约定
 

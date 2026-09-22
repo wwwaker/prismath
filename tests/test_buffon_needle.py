@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from awe_math.models.buffon_needle.model import (
+from prismath.models.buffon_needle.model import (
     MAX_RATIO,
     MIN_RATIO,
     PI,

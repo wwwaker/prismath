@@ -20,7 +20,7 @@ import unittest
 from collections import deque
 from typing import Dict, List, Sequence, Set, Tuple
 
-from awe_math.models.site_percolation.model import (
+from prismath.models.site_percolation.model import (
     SitePercolation,
     batch_spread_probability,
     encode_sites,
@@ -73,7 +73,7 @@ class StructureChangeTest(unittest.TestCase):
     """
 
     def test_resize_in_place_rebuilds_tables(self) -> None:
-        from awe_math.models.site_percolation.model import SitePercolation
+        from prismath.models.site_percolation.model import SitePercolation
 
         grid = SitePercolation(rows=20, cols=20, p=0.6, rng=1)
         for rows, cols in ((20, 30), (30, 20), (15, 25), (25, 15)):
@@ -90,7 +90,7 @@ class StructureChangeTest(unittest.TestCase):
 
     def test_resize_without_regenerate_is_still_safe(self) -> None:
         """没调 ``regenerate`` 就直接读，也要安全：入口会自己对齐。"""
-        from awe_math.models.site_percolation.model import SitePercolation
+        from prismath.models.site_percolation.model import SitePercolation
 
         grid = SitePercolation(rows=20, cols=20, p=0.6, rng=1)
         grid.rows, grid.cols = 12, 34
@@ -99,7 +99,7 @@ class StructureChangeTest(unittest.TestCase):
         self.assertLessEqual(grid.spread_stats()[0], 12 * 34)
 
     def test_switch_lattice_and_direction_in_place(self) -> None:
-        from awe_math.models.site_percolation.model import SitePercolation
+        from prismath.models.site_percolation.model import SitePercolation
 
         grid = SitePercolation(rows=16, cols=24, p=0.6, rng=1)
         for lattice in ("square", "triangular"):
@@ -223,7 +223,7 @@ class CriticalSweepTest(unittest.TestCase):
 
     def test_matches_per_point_path(self) -> None:
         """默认组合走单遍扫描；与"每点独立重跑"应在统计容差内一致。"""
-        from awe_math.models.site_percolation.model import scan_curve
+        from prismath.models.site_percolation.model import scan_curve
 
         points = [0.45, 0.55, 0.60, 0.65, 0.72]
         trials = 300
@@ -242,7 +242,7 @@ class CriticalSweepTest(unittest.TestCase):
                 self.assertLess(abs(res.mean_ratio - direct.mean_ratio), 0.10)
 
     def test_curve_is_monotone_and_hits_the_extremes(self) -> None:
-        from awe_math.models.site_percolation.model import scan_curve
+        from prismath.models.site_percolation.model import scan_curve
 
         points = [0.05, 0.30, 0.50, 0.65, 0.80, 0.95]
         results = scan_curve(points, rows=16, cols=16, trials=200, rng=11)
@@ -254,13 +254,13 @@ class CriticalSweepTest(unittest.TestCase):
         self.assertEqual(len({res.elapsed for res in results}), 1)
 
     def test_mean_ratio_comes_from_the_top_cluster(self) -> None:
-        from awe_math.models.site_percolation.model import scan_curve
+        from prismath.models.site_percolation.model import scan_curve
 
         results = scan_curve([0.65], rows=20, cols=20, trials=150, rng=5)
         self.assertGreater(results[0].mean_ratio, 0.2)
 
     def test_other_combinations_keep_the_per_point_path(self) -> None:
-        from awe_math.models.site_percolation.model import scan_curve
+        from prismath.models.site_percolation.model import scan_curve
 
         results = scan_curve([0.3, 0.5, 0.7], rows=12, cols=12, trials=40, rng=3,
                              inject="random")
@@ -283,7 +283,7 @@ class InjectDefaultTest(unittest.TestCase):
         取值会落到 fallback —— 默认值是 ``random`` 时这个 bug 被掩盖，换成 ``top`` 就会
         静默改掉注水方式。
         """
-        from awe_math.models.site_percolation.spec import _options
+        from prismath.models.site_percolation.spec import _options
 
         self.assertEqual(_options({})["inject"], "top")                            # 缺省
         self.assertEqual(_options({"inject": "顶端整行占据格"})["inject"], "top")     # 中文标签
@@ -310,7 +310,7 @@ class BatchAndScanTest(unittest.TestCase):
     """批量统计与扫描的对外契约（把它们钉住，重构时不会悄悄改口径）。"""
 
     def test_batch_is_reproducible_with_a_seed(self) -> None:
-        from awe_math.models.site_percolation.model import batch_spread_probability
+        from prismath.models.site_percolation.model import batch_spread_probability
 
         first = batch_spread_probability(rows=20, cols=20, p=0.6, trials=40, rng=99)
         second = batch_spread_probability(rows=20, cols=20, p=0.6, trials=40, rng=99)
@@ -319,7 +319,7 @@ class BatchAndScanTest(unittest.TestCase):
         self.assertAlmostEqual(first.mean_ratio, second.mean_ratio, places=12)
 
     def test_probability_is_a_rate(self) -> None:
-        from awe_math.models.site_percolation.model import batch_spread_probability
+        from prismath.models.site_percolation.model import batch_spread_probability
 
         result = batch_spread_probability(rows=12, cols=12, p=0.9, trials=50, rng=3)
         self.assertLessEqual(0.0, result.probability)
@@ -327,7 +327,7 @@ class BatchAndScanTest(unittest.TestCase):
         self.assertEqual(result.probability, result.success / result.trials)
 
     def test_scan_reports_every_point_and_is_monotone_at_the_extremes(self) -> None:
-        from awe_math.models.site_percolation.model import scan_curve
+        from prismath.models.site_percolation.model import scan_curve
 
         points = [0.05, 0.95]
         seen: List[Tuple[int, float]] = []
@@ -339,7 +339,7 @@ class BatchAndScanTest(unittest.TestCase):
 
     def test_span_criterion_ignores_injection(self) -> None:
         """文档里那句"贯通判据与注水方式无关"必须在同一批格地上逐次成立。"""
-        from awe_math.models.site_percolation.model import batch_spread_probability
+        from prismath.models.site_percolation.model import batch_spread_probability
 
         for p in (0.5, 0.62, 0.75):
             with self.subTest(p=p):

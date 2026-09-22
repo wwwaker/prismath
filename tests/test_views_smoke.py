@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import unittest
 
-from awe_math.registry import all_models, load_models
+from prismath.registry import all_models, load_models
 
 try:                                                    # pragma: no cover
     import tkinter as tk
@@ -48,9 +48,9 @@ class ViewSmokeTest(unittest.TestCase):
 
     def _open(self, spec):
         """按外壳的真实路径打开一个模型视图，返回 ``(root, shell)``。"""
-        from awe_math.ui.tk.kit import discover_views
-        from awe_math.ui.tk.shell import DesktopShell
-        from awe_math.ui.tk.theme import install_theme
+        from prismath.ui.tk.kit import discover_views
+        from prismath.ui.tk.shell import DesktopShell
+        from prismath.ui.tk.theme import install_theme
 
         discover_views()
         root = tk.Tk()
@@ -82,9 +82,9 @@ class ViewSmokeTest(unittest.TestCase):
 
     def test_switching_between_models_is_clean(self) -> None:
         """连着切模型（先渗流再生命游戏）不该留下残影或抛异常 —— 走的是 ``_reset_host``。"""
-        from awe_math.ui.tk.kit import discover_views
-        from awe_math.ui.tk.shell import DesktopShell
-        from awe_math.ui.tk.theme import install_theme
+        from prismath.ui.tk.kit import discover_views
+        from prismath.ui.tk.shell import DesktopShell
+        from prismath.ui.tk.theme import install_theme
 
         discover_views()
         load_models()
@@ -119,9 +119,9 @@ class ViewSmokeTest(unittest.TestCase):
         内核的邻居表 / 边表都是按尺寸预编译的，所以这一步必须真的重建 —— 否则就是
         ``IndexError: bytearray index out of range``。这条测试把用户那一步原样走一遍。
         """
-        from awe_math.ui.tk.kit import discover_views
-        from awe_math.ui.tk.shell import DesktopShell
-        from awe_math.ui.tk.theme import install_theme
+        from prismath.ui.tk.kit import discover_views
+        from prismath.ui.tk.shell import DesktopShell
+        from prismath.ui.tk.theme import install_theme
 
         discover_views()
         load_models()

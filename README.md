@@ -1,4 +1,4 @@
-# 数学模型可视化工具箱（awe_math）
+# 数学模型可视化工具箱（prismath）
 
 把数学模型的**计算内核**、**元数据**与**界面**分开组织：一个模型一个目录，同一个模型可以挂到
 桌面窗口 / 终端 / 网页等不同界面后端上，而界面代码跟着模型走。
@@ -37,7 +37,7 @@ python main.py
 | `python main.py --model n_body --ui cli --frames 200` | 终端里跑一段多星运动（守恒量 + 末态星图） |
 | `python main.py --model n_body --ui cli --scan` | 终端里扫描「时间步长 dt → 最大能量漂移」（看二阶收敛） |
 | `python main.py --ui web` | 网页界面（**暂时弃用**，需显式指定，见下文） |
-| `python -m awe_math.ui.tk` | 等价于 `python main.py`（直接从包内部启动桌面窗口） |
+| `python -m prismath.ui.tk` | 等价于 `python main.py`（直接从包内部启动桌面窗口） |
 
 `--model` 支持标识（`percolation`）、序号（`1`）与名称关键字（`perc`）。
 进入模型后，窗口顶部的「模型」下拉框与「☰ 模型列表」按钮可以随时切换。
@@ -168,8 +168,8 @@ main.py                          唯一入口（转发给 launcher）
 requirements.txt                 依赖声明：numpy（必需）/ matplotlib（可选，曲线页）
 docs/                            架构与 UI 评审文档（面向开发者，含依赖策略 §2.4）
 tests/                           回归网：金样本 + 单元测试 + 微基准（见下文「测试与基准」）
-awe_math/
-├── spec.py                      模型元数据规范：参数 / 动作 / 视图
+prismath/
+├── spec.py                      模型元数据规范：参数 / 动作 / CLI 选项 / 视图
 ├── registry.py                  模型注册表 + 「一个模型长什么样」的目录约定
 ├── launcher.py                  入口流程：默认桌面窗口 / --menu / --ui 指定后端
 ├── models/                      各数学模型（每个包自带自己的界面）
@@ -200,7 +200,7 @@ awe_math/
 └── ui/                          界面后端
     ├── __init__.py              后端注册表（tk / cli / web）
     ├── tk/                      桌面窗口（默认）
-    │   ├── __main__.py          支持 python -m awe_math.ui.tk
+    │   ├── __main__.py          支持 python -m prismath.ui.tk
     │   ├── shell.py             窗口外壳：模型下拉框 + 「☰ 模型列表」+ 视图切换
     │   ├── portal.py            模型列表入口页
     │   ├── theme.py             深色扁平主题（配色 / 字体 / ttk 样式）
@@ -223,7 +223,7 @@ awe_math/
 **三条硬规则**（改代码时请遵守）：
 
 1. `model.py` **只依赖标准库 + numpy**，不要 import 界面代码——纯计算要能单独导入、单独测试，
-   并且四个内核都支持**直接运行**（`python -m awe_math.models.<模型>.model` 跑自检）；
+   并且四个内核都支持**直接运行**（`python -m prismath.models.<模型>.model` 跑自检）；
 2. `views/` **只被对应后端懒加载**：不要在模型的 `__init__.py` 里 import 它，否则网页服务、
    终端模式会被迫加载 tkinter / matplotlib；
 3. **界面骨架按后端放**（`ui/<后端>/`），**模型特化跟着模型走**
@@ -247,10 +247,12 @@ awe_math/
 （浮点差异、RNG 差异）都高于 numpy 带来的收益，代码也因此更短更直白。取而代之的三条纪律：
 
 1. **语义不变**：重写只许换实现、不许换定义 —— 每个模型内置的自检（`python -m
-   awe_math.models.<模型>.model`）必须继续全绿；
+   prismath.models.<模型>.model`）必须继续全绿；
 2. **实测进文档**：重写后要重新标定并把数字写回 docstring / README（本仓库的惯例是
    **性能数字必须是实测值**，不许估算）；
-3. **入口友好报错**：缺 `numpy` 时提示 `pip install -r requirements.txt`，而不是抛 ImportError 堆栈。
+3. **入口友好报错**：缺 `numpy` 时提示 `pip install -r requirements.txt`，而不是抛 ImportError
+   堆栈。实现见 `prismath/_deps.py`（`exit_if_missing`），入口 `launcher.main` 与桌面后端的
+   `launch()` 各拦一次；检查放在 `parse_args` **之后**，所以缺依赖时 `--help` 依然可用。
 
 `views/` 的**懒加载**照旧保留 —— 它不再是"为了省依赖"，而是为了让终端模式不被 tkinter 拖累。
 
@@ -272,7 +274,7 @@ python -m tests._harness --update <模型>      # 重新生成金样本（谨慎
 
 | 文件 | 管什么 |
 | --- | --- |
-| `tests/test_golden.py` + `tests/golden/<模型>.txt` | **金样本**：各模型的 `python -m awe_math.models.<模型>.model` 自检输出**逐字比对**。自检输出是确定性的（连跑两次逐字相同），所以能用最严格的方式比 —— 改内核后这里变红，先问"这个变化是有意的吗" |
+| `tests/test_golden.py` + `tests/golden/<模型>.txt` | **金样本**：各模型的 `python -m prismath.models.<模型>.model` 自检输出**逐字比对**。自检输出是确定性的（连跑两次逐字相同），所以能用最严格的方式比 —— 改内核后这里变红，先问"这个变化是有意的吗" |
 | `tests/test_life_game.py` 等五份单元测试 | 教材结论与契约断言：纯整数结论（方块 / 闪烁器 / 脉冲星 / 滑翔机位移）**精确相等**；统计量**固定种子 + 容差**。渗流的两份还带**等价性护栏**：邻居/边表必须与几何逐条一致、向量化推进必须与朴素 BFS 同集合同分层、并查集与 BFS 必须同答案、`bytes` 掩码必须与分类型边表互相对得上；`n_body` 那份钉住守恒量（动量到 1e-12）、开普勒第三定律、辛积分器的二阶收敛（比值 3–5.5）、"误差有界不漂移"，以及**视图交互**（滚轮缩放保持光标下的世界点不动、拖动平移、选中星体并拖动、质量滑块对数映射与重锚基准、能量曲线滑动窗口铺满横轴） |
 | `tests/test_views_smoke.py` | **视图无头冒烟**：按外壳的真实路径真开一个窗口、建出视图，断言画布上真有图元（没有图形环境时自动跳过）。这一层专盯"骨架与内核之间的参数契约" —— 内核测试一个窗口都不建，所以漏过一次"进模型一片空白"（见 `docs` §6.2） |
 | `tests/bench.py` | 微基准 —— **文档里所有性能数字的唯一来源**（中位数 + 预热 + 波动范围） |
@@ -288,11 +290,11 @@ python -m tests._harness --update <模型>      # 重新生成金样本（谨慎
 
 ## 新增一个模型
 
-**参考实现**：`awe_math/models/buffon_needle/` 就是一个真实的例子（**非渗流**模型）。
+**参考实现**：`prismath/models/buffon_needle/` 就是一个真实的例子（**非渗流**模型）。
 照抄它的结构即可 —— 只加一个目录，不改任何已有文件：
 
 ```
-awe_math/models/<模型包>/
+prismath/models/<模型包>/
     __init__.py     # register(build_spec())
     model.py        # 投针几何 + Monte Carlo 估计（纯计算，只 import 标准库 + numpy）
     spec.py         # 参数（针长 / 线距 / 投针根数 / 重复组数）、动作、view="buffon_needle"
@@ -317,7 +319,7 @@ ModelSpec(
 **同名** view。**非渗流模型一般继承通用图表骨架** `ChartViewBase`，只写声明：
 
 ```python
-from awe_math.ui.tk.kit import ChartSpec, ChartViewBase, register_view
+from prismath.ui.tk.kit import ChartSpec, ChartViewBase, register_view
 
 @register_view("buffon_needle")
 class BuffonNeedleView(ChartViewBase):
@@ -406,25 +408,25 @@ class BuffonNeedleView(ChartViewBase):
 
 | 想了解 | 看这里 |
 | --- | --- |
-| 模型怎么注册、一个模型包含哪些文件 | `awe_math/registry.py` |
-| 参数 / 动作 / 视图的元数据规范 | `awe_math/spec.py` |
-| 入口流程与无图形环境的降级策略 | `awe_math/launcher.py` |
-| 桌面视图的万能骨架（不认识模型） | `awe_math/ui/tk/kit/base.py` 的 `ModelViewBase` |
-| 桌面视图对模型的要求（可执行契约） | `awe_math/ui/tk/kit/protocols.py` |
-| 参数表单怎么由 spec.params 生成 | `awe_math/ui/tk/kit/form.py` |
-| 通用图表怎么声明与绘制（含逐帧动画与**栅格图元**、播放控制、点击反查） | `awe_math/ui/tk/kit/chart.py` |
-| 判据的全部界面语义（徽章 / 结论 / 曲线标注） | `awe_math/ui/tk/kit/criteria.py` |
-| 数据级 / 对象级两套契约的字段说明 | `awe_math/spec.py`（模块说明） |
-| 视图怎么被自动发现（约定优于中心清单） | `awe_math/ui/tk/kit/__init__.py` |
-| 一个真实渗流模型的完整视图实现 | `awe_math/models/percolation/views/tk.py` |
-| 一个真实**非渗流**模型的完整实现（通用图表骨架 + 纯 Monte Carlo） | `awe_math/models/buffon_needle/` |
-| 一个真实**栅格类**模型的完整实现（栅格图元 + 周期检测 + 图案库） | `awe_math/models/life_game/` |
+| 模型怎么注册、一个模型包含哪些文件 | `prismath/registry.py` |
+| 参数 / 动作 / CLI 选项 / 视图的元数据规范 | `prismath/spec.py`（`CliOption` / `CliArgs`） |
+| 入口流程与无图形环境的降级策略 | `prismath/launcher.py` |
+| 桌面视图的万能骨架（不认识模型） | `prismath/ui/tk/kit/base.py` 的 `ModelViewBase` |
+| 桌面视图对模型的要求（可执行契约） | `prismath/ui/tk/kit/protocols.py` |
+| 参数表单怎么由 spec.params 生成 | `prismath/ui/tk/kit/form.py` |
+| 通用图表怎么声明与绘制（含逐帧动画与**栅格图元**、播放控制、点击反查） | `prismath/ui/tk/kit/chart.py` |
+| 判据的全部界面语义（徽章 / 结论 / 曲线标注） | `prismath/ui/tk/kit/criteria.py` |
+| 数据级 / 对象级两套契约的字段说明 | `prismath/spec.py`（模块说明） |
+| 视图怎么被自动发现（约定优于中心清单） | `prismath/ui/tk/kit/__init__.py` |
+| 一个真实渗流模型的完整视图实现 | `prismath/models/percolation/views/tk.py` |
+| 一个真实**非渗流**模型的完整实现（通用图表骨架 + 纯 Monte Carlo） | `prismath/models/buffon_needle/` |
+| 一个真实**栅格类**模型的完整实现（栅格图元 + 周期检测 + 图案库） | `prismath/models/life_game/` |
 
 ---
 
 ## 已知状态
 
-* **网页后端暂时弃用**：代码保留在 `ui/web/`，把 `awe_math/ui/__init__.py` 里 `web` 的
+* **网页后端暂时弃用**：代码保留在 `ui/web/`，把 `prismath/ui/__init__.py` 里 `web` 的
   `deprecated` 改回 `False` 即可恢复为可选后端；
 * 桌面视图层已拆成**三层骨架**：通用图表 `ChartViewBase`（声明式图表 + 动画 + 栅格图元）/
   万能 `ModelViewBase` / 渗流特化 `PercolationViewBase`，并已由 `buffon_needle` 与

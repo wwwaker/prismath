@@ -1,6 +1,6 @@
 """重构护栏 1：金样本回归（把"重构前的结果"钉死）。
 
-各模型的内核自检（``python -m awe_math.models.<模型>.model``）已实测为**完全确定性**
+各模型的内核自检（``python -m prismath.models.<模型>.model``）已实测为**完全确定性**
 （连跑两次逐字节相同），所以可以当"金样本"逐字比对。这是本仓库性价比最高的一张网：
 它一次性覆盖了所有已经写进文档的教学结论 ——
 
@@ -94,7 +94,7 @@ def normalize(text: str) -> str:
 def run_selfcheck(model: str, timeout: float = 900.0) -> str:
     """在仓库根目录跑一个模型的内核自检，返回归一化后的 stdout。"""
     proc = subprocess.run(
-        [sys.executable, "-X", "utf8", "-m", f"awe_math.models.{model}.model"],
+        [sys.executable, "-X", "utf8", "-m", f"prismath.models.{model}.model"],
         cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8",
         errors="replace", timeout=timeout,
     )

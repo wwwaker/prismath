@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-awe_math · 数学模型可视化工具箱 —— 统一入口
+prismath · 数学模型可视化工具箱 —— 统一入口
 =============================================
 
 用法::
@@ -13,10 +13,10 @@ awe_math · 数学模型可视化工具箱 —— 统一入口
     python main.py --model percolation --ui cli --scan   # 终端里跑统计 / 扫描曲线
     python main.py --ui web                         # 网页界面（暂时弃用，需显式指定）
 
-新增数学模型不需要修改本文件：在 ``awe_math/models/`` 下新建一个包，
-在其中调用 :func:`awe_math.registry.register` 注册 ``ModelSpec`` 即可；
+新增数学模型不需要修改本文件：在 ``prismath/models/`` 下新建一个包，
+在其中调用 :func:`prismath.registry.register` 注册 ``ModelSpec`` 即可；
 若要给模型配桌面界面，再在同一个包里加 ``views/tk.py``（见
-:mod:`awe_math.registry` 的模块说明）。
+:mod:`prismath.registry` 的模块说明）。
 """
 
 from __future__ import annotations
@@ -34,10 +34,10 @@ except (AttributeError, ValueError):
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from awe_math.launcher import main
+    from prismath.launcher import main
 except ImportError as exc:  # 通常是装错了目录或缺少包
-    print(f"× 无法导入 awe_math 包：{exc}", file=sys.stderr)
-    print("  请在项目根目录（含 awe_math/ 与 main.py 的目录）下运行本文件。", file=sys.stderr)
+    print(f"× 无法导入 prismath 包：{exc}", file=sys.stderr)
+    print("  请在项目根目录（含 prismath/ 与 main.py 的目录）下运行本文件。", file=sys.stderr)
     raise SystemExit(1)
 
 

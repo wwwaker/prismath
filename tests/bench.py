@@ -102,7 +102,7 @@ class Bench:
 # 每个模型的用例：参数要与自检 / CLI 的默认玩法一致，否则数字与用户感受无关
 # ----------------------------------------------------------------------
 def bench_life_game() -> None:
-    from awe_math.models.life_game.model import LifeBoard, scan_survival
+    from prismath.models.life_game.model import LifeBoard, scan_survival
 
     bench = Bench("生命游戏内核（环面 B3/S23）")
     board_50 = LifeBoard(rows=50, cols=50, density=0.30, rng=7)
@@ -120,7 +120,7 @@ def bench_life_game() -> None:
 
 
 def bench_buffon_needle() -> None:
-    from awe_math.models.buffon_needle.model import BuffonNeedle
+    from prismath.models.buffon_needle.model import BuffonNeedle
 
     bench = Bench("蒲丰投针内核（L/d = 0.8）")
     bench.case("1 万针 · 一次投掷",
@@ -139,7 +139,7 @@ def bench_buffon_needle() -> None:
 
 
 def bench_site_percolation() -> None:
-    from awe_math.models.site_percolation.model import (
+    from prismath.models.site_percolation.model import (
         SitePercolation,
         batch_spread_probability,
         scan_curve,
@@ -176,7 +176,7 @@ def bench_site_percolation() -> None:
 
 
 def bench_percolation() -> None:
-    from awe_math.models.percolation.model import (
+    from prismath.models.percolation.model import (
         PercolationGrid,
         batch_percolation_probability,
         scan_curve,
@@ -217,7 +217,7 @@ def bench_percolation() -> None:
 
 
 def bench_n_body() -> None:
-    from awe_math.models.n_body.model import (
+    from prismath.models.n_body.model import (
         DEFAULT_DT,
         NBody,
         SCENARIO_CLUSTER,

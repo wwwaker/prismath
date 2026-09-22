@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import unittest
 
-from awe_math.models.life_game.model import (
+from prismath.models.life_game.model import (
     BOUNDARY_DEAD,
     BOUNDARY_TORUS,
     MAX_SIZE,
@@ -239,7 +239,7 @@ class OptionsContractTest(unittest.TestCase):
     """
 
     def test_accepts_internal_values(self) -> None:
-        from awe_math.models.life_game.spec import options_from_ui
+        from prismath.models.life_game.spec import options_from_ui
 
         options = options_from_ui({"rule": "B3/S23", "boundary": "torus",
                                    "pattern": "glider"})

@@ -21,7 +21,7 @@ import unittest
 from collections import deque
 from typing import Dict, List, Sequence, Set, Tuple
 
-from awe_math.models.percolation.model import (
+from prismath.models.percolation.model import (
     PercolationGrid,
     batch_percolation_probability,
     encode_edges,
@@ -239,7 +239,7 @@ class CriticalSweepTest(unittest.TestCase):
         两条路径的随机流不同，所以差值按"两个独立估计之差"的尺度给容差（≈ 2√2 σ），
         粗错（曲线整体偏移、方向搞反）一定会被抓到。
         """
-        from awe_math.models.percolation.model import scan_curve
+        from prismath.models.percolation.model import scan_curve
 
         points = [0.35, 0.45, 0.50, 0.55, 0.65]
         trials = 300
@@ -258,7 +258,7 @@ class CriticalSweepTest(unittest.TestCase):
                 self.assertLess(abs(res.mean_ratio - direct.mean_ratio), 0.10)
 
     def test_curve_is_monotone_and_hits_the_extremes(self) -> None:
-        from awe_math.models.percolation.model import scan_curve
+        from prismath.models.percolation.model import scan_curve
 
         points = [0.05, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95]
         results = scan_curve(points, rows=16, cols=16, trials=200, rng=11)
@@ -271,14 +271,14 @@ class CriticalSweepTest(unittest.TestCase):
 
     def test_mean_ratio_comes_from_the_top_cluster(self) -> None:
         """平均浸润比例要与"顶端整行注水"的量级一致（不是随机一格的量级）。"""
-        from awe_math.models.percolation.model import scan_curve
+        from prismath.models.percolation.model import scan_curve
 
         results = scan_curve([0.5], rows=20, cols=20, trials=150, rng=5)
         self.assertGreater(results[0].mean_ratio, 0.2)
 
     def test_other_combinations_keep_the_per_point_path(self) -> None:
         """非默认组合仍逐 p 重跑（每个点各自计时，elapsed 不会全部相同）。"""
-        from awe_math.models.percolation.model import scan_curve
+        from prismath.models.percolation.model import scan_curve
 
         results = scan_curve([0.3, 0.5, 0.7], rows=12, cols=12, trials=40, rng=3,
                              inject="random")
@@ -295,7 +295,7 @@ class OptionsContractTest(unittest.TestCase):
     """
 
     def test_accepts_labels_and_internal_values(self) -> None:
-        from awe_math.models.percolation.spec import _grid_options
+        from prismath.models.percolation.spec import _grid_options
 
         labelled = _grid_options({"lattice": "三角网（6 邻域）",
                                   "direction": "只允许向下/向右（经典有向渗流）"})
@@ -322,7 +322,7 @@ class StructureChangeTest(unittest.TestCase):
     """
 
     def test_resize_in_place_rebuilds_tables(self) -> None:
-        from awe_math.models.percolation.model import PercolationGrid
+        from prismath.models.percolation.model import PercolationGrid
 
         grid = PercolationGrid(rows=20, cols=20, p=0.5, rng=1)
         for rows, cols in ((20, 30), (30, 20), (15, 25), (25, 15)):
@@ -340,7 +340,7 @@ class StructureChangeTest(unittest.TestCase):
 
     def test_resize_without_regenerate_is_still_safe(self) -> None:
         """没调 ``regenerate`` 就直接读，也要安全：入口会自己对齐（与旧内核一样宽容）。"""
-        from awe_math.models.percolation.model import PercolationGrid
+        from prismath.models.percolation.model import PercolationGrid
 
         grid = PercolationGrid(rows=20, cols=20, p=0.5, rng=1)
         grid.rows, grid.cols = 12, 34
@@ -350,7 +350,7 @@ class StructureChangeTest(unittest.TestCase):
 
     def test_switch_lattice_and_direction_in_place(self) -> None:
         """换格子类型 / 方向模式同样是结构变化 —— 表要重编、旧结果要作废。"""
-        from awe_math.models.percolation.model import PercolationGrid
+        from prismath.models.percolation.model import PercolationGrid
 
         grid = PercolationGrid(rows=16, cols=24, p=0.5, rng=1)
         for lattice in ("square", "triangular"):
@@ -379,7 +379,7 @@ class UiContractTest(unittest.TestCase):
     def test_ui_style_kwargs_reach_the_model(self) -> None:
         import threading
 
-        from awe_math.models.percolation.model import (
+        from prismath.models.percolation.model import (
             batch_percolation_probability,
             scan_curve,
         )
@@ -437,7 +437,7 @@ class BatchAndScanTest(unittest.TestCase):
         self.assertEqual(highest.success, highest.trials)
 
     def test_scan_reports_every_point(self) -> None:
-        from awe_math.models.percolation.model import scan_curve
+        from prismath.models.percolation.model import scan_curve
 
         points = [0.2, 0.5, 0.8]
         seen: List[Tuple[int, float]] = []
