@@ -13,7 +13,7 @@ from tests import _harness
 
 
 class GoldenSelfCheckTest(unittest.TestCase):
-    """四个模型的内核自检必须与 ``tests/golden/<模型>.txt`` 逐字一致。"""
+    """每个模型的内核自检必须与 ``tests/golden/<模型>.txt`` 逐字一致。"""
 
     def test_selfcheck_matches_golden(self) -> None:
         for model in _harness.MODELS:

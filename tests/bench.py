@@ -216,12 +216,49 @@ def bench_percolation() -> None:
     bench.report()
 
 
+def bench_n_body() -> None:
+    from awe_math.models.n_body.model import (
+        DEFAULT_DT,
+        NBody,
+        SCENARIO_CLUSTER,
+        SCENARIO_DISK,
+        SCENARIO_FIGURE_EIGHT,
+        build_scenario,
+    )
+
+    bench = Bench("万有引力多星内核（速度 Verlet，O(N^2) 的力计算就是全部成本）")
+
+    def body(scenario: str, stars=None, softening=None, dt=DEFAULT_DT) -> NBody:
+        preset = build_scenario(scenario, stars=stars, seed=7)
+        return NBody(preset.positions, preset.velocities, preset.masses,
+                     dt=dt, softening=preset.softening if softening is None else softening,
+                     trail=0, scenario=preset.key)
+
+    bench.case("8 字三体（3 颗）· 单步",
+               lambda: body(SCENARIO_FIGURE_EIGHT).step(), unit="步")
+    bench.case("8 字三体 · 积分一个周期（dt = 0.002）",
+               lambda: body(SCENARIO_FIGURE_EIGHT, dt=0.002).run(frames=3163, substeps=1),
+               unit="次", repeat=3, note="自检里那条回位偏差的口径")
+    bench.case("随机星团 24 颗 · 单步",
+               lambda: body(SCENARIO_CLUSTER).step(), unit="步")
+    bench.case("星系盘 60 颗 · 单步",
+               lambda: body(SCENARIO_DISK).step(), unit="步")
+    bench.case("星系盘 60 颗 · 600 帧 × 6 子步",
+               lambda: body(SCENARIO_DISK).run(frames=600, substeps=6),
+               unit="次", repeat=3, note="桌面实时播放一帧 = 6 子步")
+    bench.case("随机星团 200 颗 · 单步",
+               lambda: body(SCENARIO_CLUSTER, stars=200).step(),
+               unit="步", repeat=3, note="代价随 N² 增长，界面上的实时播放上限就在这附近")
+    bench.report()
+
+
 #: 模型名 -> 基准函数（新增模型时在这里加一行即可）
 BENCHES: Dict[str, Callable[[], None]] = {
     "life_game": bench_life_game,
     "buffon_needle": bench_buffon_needle,
     "site_percolation": bench_site_percolation,
     "percolation": bench_percolation,
+    "n_body": bench_n_body,
 }
 
 

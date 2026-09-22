@@ -1,6 +1,6 @@
 """重构护栏 1：金样本回归（把"重构前的结果"钉死）。
 
-四个模型的内核自检（``python -m awe_math.models.<模型>.model``）已实测为**完全确定性**
+各模型的内核自检（``python -m awe_math.models.<模型>.model``）已实测为**完全确定性**
 （连跑两次逐字节相同），所以可以当"金样本"逐字比对。这是本仓库性价比最高的一张网：
 它一次性覆盖了所有已经写进文档的教学结论 ——
 
@@ -8,7 +8,9 @@
   "同一批格地/网格"的一致性对照；
 * 投针：固定种子下 π 估计随 N 的收敛表、多组重复的均值 ± 标准差；
 * 生命游戏：方块 / 闪烁器 / 脉冲星 / 滑翔机 / 滑翔机枪 / R 五连块、图案表、环面收敛、
-  初始密度 → 长期结局的扫描表。
+  初始密度 → 长期结局的扫描表；
+* 万有引力多星：两体圆轨道与 8 字三体的回位偏差、守恒量（能量/动量/角动量）、
+  固定种子下随机场景的末态半径与逃逸数、以及 dt -> 最大能量漂移的二阶收敛表。
 
 **为什么用子进程跑**：用户就是这么跑的（``python -m …``），子进程能同时钉住
 "能否独立运行"这件事；顺带避免把模型的 import 副作用带进测试进程。
@@ -16,13 +18,18 @@ stderr 里的 ``RuntimeWarning``（``-m`` 导入同名模块的提示）是解�
 
 重新生成金样本（**只在确认结果的变化是有意为之之后**）::
 
-    python -m tests._harness --update                # 四个模型全刷新
+    python -m tests._harness --update                # 全部模型刷新
     python -m tests._harness --update life_game      # 只刷新一个（重构时通常只需要这样）
 
 文件格式：``tests/golden/<模型>.txt``，UTF-8 无 BOM，行尾统一 ``\\n``。
 
 金样本更新记录（每次刷新都要在这里写一句"为什么"）
 --------------------------------------------------
+* 2026-09-22 ``n_body``：**新增模型**（万有引力多星），首次生成金样本。
+  自检输出全是确定性数字：两体圆轨道的半径/回位偏差、8 字三体一个周期后的最大偏差、
+  随机场景（固定种子 20260922）的末态最大半径与逃逸数、以及 dt -> 最大能量漂移的
+  二阶收敛表（dt 减半、漂移降为约 1/4）。它钉住的是**积分器与守恒量**，
+  不是"某一帧长什么样"。
 * 2026-09-17 ``life_game``：内核改为 numpy 向量化，随机源由 ``random.Random`` 换成
   ``numpy.random.default_rng``。**随机相关的几行随之变化**：12×12 环面的收敛代数列表、
   密度扫描表、以及"环面 20×20（600 代）"那一行的结局（换了个随机开局，于是它这次
@@ -76,7 +83,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 GOLDEN_DIR = pathlib.Path(__file__).resolve().parent / "golden"
 
 #: 参与金样本回归的模型（顺序 = 报告顺序；与 ``requirements.txt`` / README 的模型表一致）
-MODELS: Sequence[str] = ("life_game", "buffon_needle", "site_percolation", "percolation")
+MODELS: Sequence[str] = ("life_game", "buffon_needle", "site_percolation", "percolation", "n_body")
 
 
 def normalize(text: str) -> str:
