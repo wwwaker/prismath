@@ -79,7 +79,7 @@ class ModelPortal:
 
         tips = ttk.Frame(head, style="Card.TFrame")
         tips.grid(row=0, column=1, rowspan=2, sticky="e")
-        ttk.Label(tips, text="网页界面暂时弃用（仅 --ui web 可显式进入）",
+        ttk.Label(tips, text="网页界面：python main.py --ui web",
                   style="CardDim.TLabel", font=FONT_SM).pack(anchor="e")
         ttk.Label(tips, text="终端交互模式：python main.py --menu",
                   style="CardDim.TLabel", font=FONT_SM).pack(anchor="e", pady=(3, 0))

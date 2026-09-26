@@ -10,12 +10,10 @@ key       说明                                         依赖
 ========  ==========================================  ==============================
 ``tk``    桌面窗口（Tkinter）：模型列表入口页 + 逐层动画    tkinter（可选 matplotlib）
 ``cli``   终端统计模式，适合批量化出数                  无
-``web``   现代网页界面（Canvas 动画 + 玻璃拟态配色）     Python 标准库（可选 pywebview）
+``web``   现代网页界面（Canvas 动画 + 模型专用实验页）    Python 标准库（可选 pywebview）
 ========  ==========================================  ==============================
 
-**暂时弃用**：``web`` 后端目前不再出现在入口页与终端菜单里，只能通过
-``python main.py --ui web`` 显式进入（详见该后端的 ``note``）；默认入口是 ``tk`` 的
-模型列表页。代码保留，随时可以恢复。
+``web`` 是当前正在建设的主交互方向；已完成模型使用专用实验页，尚未迁移的模型暂时使用通用结果视图。
 
 新增界面后端时，只需在 :data:`UI_BACKENDS` 中登记一个入口函数。
 入口函数签名为 ``entry(spec, args) -> int``（``spec`` 可以是 ``None``，表示"先让用户挑模型"）。
@@ -39,7 +37,7 @@ class UIBackend:
     #: 入口函数；``spec`` 可以是 ``None``，表示"先让用户挑模型"（桌面窗口的入口页就是这种）
     entry: Callable[[Optional[ModelSpec], Any], int]
     requires: Tuple[str, ...] = ()
-    #: 暂时弃用：不出现在入口页 / 终端菜单里，仅 ``--ui <key>`` 可显式进入
+    #: 仍处于维护中的后端可通过该字段控制是否出现在入口页 / 终端菜单里
     deprecated: bool = False
     #: 弃用或其他需要提醒用户的一句话
     note: str = ""
@@ -59,14 +57,12 @@ class UIBackend:
 # 各后端的入口（内部延迟导入，避免没用到 tkinter 时也去加载它）
 # ----------------------------------------------------------------------
 def _run_web(spec: Optional[ModelSpec], args) -> int:
-    if spec is None:
-        raise RuntimeError("网页界面需要指定一个模型（用 --model 选择）")
     from .web.server import serve
 
     return serve(
         spec,
         host=getattr(args, "host", "127.0.0.1"),
-        port=getattr(args, "port", 8765),
+        port=getattr(args, "port", 0),
         open_browser=not getattr(args, "no_browser", False),
         desktop=getattr(args, "desktop", False),
     )
@@ -81,7 +77,7 @@ def _run_tk(spec: Optional[ModelSpec], args) -> int:
 
 def _run_cli(spec: Optional[ModelSpec], args) -> int:
     if spec is None or spec.cli is None:
-        raise RuntimeError("终端模式需要指定一个提供了 cli 入口的模型（用 --model 选择）")
+        raise RuntimeError("终端模式需要先选择一个模型；使用 --menu，或显式指定 --model")
     return spec.cli(args)
 
 
@@ -105,8 +101,8 @@ UI_BACKENDS: Dict[str, UIBackend] = {
         summary="浏览器中运行，Canvas 逐层动画 + 实时曲线，配色与交互最完整",
         entry=_run_web,
         requires=("无（可选 pywebview 以获得独立窗口）",),
-        deprecated=True,
-        note="暂时弃用：不再出现在入口页与终端菜单里，仅可用 --ui web 显式进入",
+        deprecated=False,
+        note="模型专用实验页持续迁移中；未迁移模型使用通用结果视图",
     ),
 }
 
@@ -114,7 +110,7 @@ UI_BACKENDS: Dict[str, UIBackend] = {
 def get_ui(key: str) -> UIBackend:
     """按 key 取界面后端；也支持用名称模糊匹配。
 
-    暂时弃用的后端（如 ``web``）同样可以取到——这正是"只能显式进入"的实现方式。
+    标记为暂时隐藏的后端同样可以取到，供显式指定的兼容入口使用。
     """
     text = str(key).strip().lower()
     if text in UI_BACKENDS:

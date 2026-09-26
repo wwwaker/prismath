@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ...spec import ActionSpec, CliArgs, CliOption, ModelSpec, ParamSpec
+from ...experience import ExperienceSpec, GuideStep, RenderCapabilities
 from .model import (
     AREA_REFERENCE,
     DEFAULT_ASPECT,
@@ -64,6 +65,59 @@ PALETTE_LABELS: Dict[str, str] = {
     "ice": "冰蓝（暗 → 亮蓝）",
     "heat": "暖黄（暗红 → 亮黄）",
 }
+
+CAPABILITIES = RenderCapabilities(
+    visual_kind="field",
+    interactions=("zoom", "pan", "inspect", "undo", "reset"),
+    supports_gpu_preview=True,
+    default_mode="guided",
+    advanced_controls=True,
+)
+
+EXPERIENCE = ExperienceSpec(
+    default_mode="guided",
+    guide=(
+        GuideStep(
+            key="enter-field",
+            title="先观察整幅图",
+            prompt="观察画面中明暗交错的边界。亮度表示点逃逸得有多快。",
+            explanation="Mandelbrot 集不是一张静态图片，而是复平面中每个点的迭代结果。",
+            completion_event="view_ready",
+        ),
+        GuideStep(
+            key="inspect-escape",
+            title="找一个会逃逸的点",
+            prompt="点击亮色区域，查看这个点经过多少次迭代才逃逸。",
+            explanation="点越靠近边界，逃逸通常越慢，颜色也会发生变化。",
+            completion_event="point_inspected",
+            allowed_actions=("inspect",),
+        ),
+        GuideStep(
+            key="inspect-boundary",
+            title="靠近边界",
+            prompt="点击暗部和亮部交界的位置，比较它与刚才点的逃逸时间。",
+            explanation="边界附近的细节正是分形结构最值得观察的地方。",
+            completion_event="boundary_inspected",
+            allowed_actions=("inspect",),
+        ),
+        GuideStep(
+            key="zoom-boundary",
+            title="第一次放大",
+            prompt="在边界附近滚轮缩放或点击放大，看看局部结构如何变化。",
+            explanation="缩放不是切换图片，而是在复平面中改变当前取景范围。",
+            completion_event="zoomed",
+            allowed_actions=("zoom",),
+        ),
+        GuideStep(
+            key="explore-detail",
+            title="自由探索一个新结构",
+            prompt="拖动平移，寻找一个你想继续研究的局部结构。",
+            explanation="完成这一步后，你可以打开控制台调整迭代次数和色带。",
+            completion_event="navigated",
+            allowed_actions=("pan", "zoom"),
+        ),
+    ),
+)
 
 #: 视窗中心的允许范围：集合整体落在 [-2, 0.25] × [-1.1, 1.1] 里，这里留足余量。
 #: 它同时是参数滑块的范围与内核的夹取范围 —— 两者必须是同一份，否则界面显示的位置
@@ -227,6 +281,7 @@ def options_from_ui(params: Dict[str, Any]) -> Dict[str, Any]:
         # 0 是合法值：内核按放大倍率自动给（见 model.iterations_for）
         "iterations": _clamp_int(params.get("iterations"), 0, MAX_ITERATIONS, 0),
         "pixels": _clamp_int(params.get("pixels"), MIN_PIXELS, MAX_PIXELS, DEFAULT_PIXELS),
+        "aspect": _num(params.get("aspect"), DEFAULT_ASPECT) or DEFAULT_ASPECT,
         "palette": _pick_palette(params.get("palette")),
     }
 
@@ -315,7 +370,15 @@ def handle(action: str, params: Dict[str, Any], payload: Dict[str, Any]) -> Dict
     由桌面视图自己换算后改一组参数再调 :func:`handle`），保留它是为了与统一签名一致。
     """
     if action in ("render", "zoom_in", "zoom_out", "reset_view"):
-        return _render(params, action)
+        # 网页连续场把画布尺寸作为请求提示传入；它不是模型参数，不进入
+        # ``ModelSpec.params``，因此不会污染桌面表单或命令行契约。
+        render_params = dict(params)
+        if isinstance(payload, dict):
+            if payload.get("pixels") is not None:
+                render_params["pixels"] = payload["pixels"]
+            if payload.get("aspect") is not None:
+                render_params["aspect"] = payload["aspect"]
+        return _render(render_params, action)
     raise ValueError(f"Mandelbrot 集模型不支持的动作：{action}")
 
 
@@ -474,4 +537,6 @@ def build_spec() -> ModelSpec:
                     "边界处处自相似，面积却只有 ≈ 1.5066",
                     "点哪放大哪；越深越要加迭代上限"),
         order=10,
+        capabilities=CAPABILITIES,
+        experience=EXPERIENCE,
     )

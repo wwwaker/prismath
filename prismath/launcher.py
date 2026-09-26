@@ -10,12 +10,12 @@
     python main.py --list                            # 只列出模型与界面后端后退出
     python main.py --menu                            # 终端交互模式：在命令行里选模型与界面
     python main.py --model percolation --ui cli --scan   # 终端里跑统计 / 扫描曲线
-    python main.py --ui web                          # 网页界面（暂时弃用，需显式指定）
+    python main.py --ui web                          # 网页模型集（默认加载全部模型）
 
 几个约定：
 
 * ``--ui`` 省略时用 ``tk``（桌面窗口）；``--model`` 省略时先停在模型列表页让用户挑。
-* 网页后端 ``web`` **暂时弃用**：不出现在入口页与终端菜单里，只能 ``--ui web`` 显式进入。
+* 网页后端默认加载全部模型；``--model`` 只用于打开网页时定位到某个模型，不限制服务能力。
 * 终端交互模式（原来不带参数时的流程：选模型 → 选界面）保留在 ``--menu`` 下。
 * 若这台机器开不了桌面窗口（无显示 / 没装 tkinter），自动回落到终端交互模式（非交互
   终端则直接跑终端统计模式），不会甩一个 traceback 给用户。
@@ -71,23 +71,23 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --model perc --ui cli --scan  终端里扫描 P(p) 曲线\n"
             "  python main.py --model buffon --ui cli --ratio 0.6 --throws 5000\n"
             "                                               终端里投针估计 π\n"
-            "  python main.py --ui web                      网页界面（暂时弃用，需显式指定）\n"
+            "  python main.py --ui web                      打开网页模型集（默认加载全部模型）\n"
         ),
     )
     parser.add_argument("--list", action="store_true", help="列出所有模型与界面后端后退出")
     parser.add_argument("--model", "-m", default=None,
                         help="模型标识、序号或名称关键字；省略则先在模型列表里挑")
     parser.add_argument("--ui", "-u", default=None, choices=("tk", "cli", "web"),
-                        help="界面后端：tk（默认，桌面窗口）/ cli（终端统计）/ "
-                             "web（网页，暂时弃用，需显式指定）")
+                        help="界面后端：tk（默认，桌面窗口）/ cli（终端统计）/ web（网页模型集）")
     parser.add_argument("--menu", action="store_true",
                         help="终端交互模式：在命令行里依次选择模型与界面后端")
     parser.add_argument("--seed", type=int, default=-1,
                         help="随机种子，-1 表示随机（所有模型通用）")
 
-    web = parser.add_argument_group("网页界面选项（暂时弃用的 web 后端）")
+    web = parser.add_argument_group("网页界面选项")
     web.add_argument("--host", default="127.0.0.1", help="监听地址，默认 127.0.0.1（仅本机）")
-    web.add_argument("--port", type=int, default=8765, help="监听端口，默认 8765（被占用时自动顺延）")
+    web.add_argument("--port", type=int, default=0,
+                     help="监听端口，默认自动选择空闲端口；可显式指定端口")
     web.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
     web.add_argument("--desktop", action="store_true",
                      help="用独立桌面窗口打开（需 pip install pywebview），否则用浏览器")
@@ -215,7 +215,7 @@ def _choose_ui() -> Optional[str]:
 
 
 def _resolve_model(args) -> Optional[ModelSpec]:
-    """把 ``--model`` 解析成具体模型；没给则交互选择（非交互终端取第一个）。"""
+    """把 ``--model`` 解析成具体模型；没给则交互选择，不擅自取第一个。"""
     if args.model:
         try:
             return find(args.model)
@@ -227,9 +227,8 @@ def _resolve_model(args) -> Optional[ModelSpec]:
     if sys.stdin.isatty():
         return _choose_model()
 
-    models = load_models()
-    print("未指定 --model 且当前不是交互式终端，默认使用第一个模型。")
-    return models[0] if models else None
+    print("未指定 --model：终端统计需要明确一个模型；网页和桌面入口会加载全部模型。", file=sys.stderr)
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -342,9 +341,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 _print_models()
                 return 1
     else:
-        # cli / web 必须落到具体模型上
-        spec = _resolve_model(args)
-        if spec is None:
+        # Web 服务加载全部模型；--model 只作为初始路由。CLI 仍需确定要执行哪个模型动作。
+        spec = None if ui_key == "web" and not args.model else _resolve_model(args)
+        if ui_key == "cli" and spec is None:
             return 1
 
     _announce(spec, backend)

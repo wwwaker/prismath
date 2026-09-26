@@ -45,10 +45,6 @@ class PrismathHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     # ---------------- 工具方法 ----------------
-    @property
-    def spec(self) -> ModelSpec:
-        return self.server.model_spec  # type: ignore[attr-defined]
-
     def log_message(self, fmt: str, *args: Any) -> None:  # 精简日志
         if os.environ.get("PRISMATH_VERBOSE"):
             super().log_message(fmt, *args)
@@ -120,13 +116,14 @@ class PrismathHandler(BaseHTTPRequestHandler):
             return
 
         key = match.group(1)
-        if key != self.spec.key:      # 服务一次只承载一个模型，避免状态混淆
-            self._json({"ok": False, "error": f"当前服务运行的是模型 {self.spec.key}"}, 404)
+        spec = self.server.models.get(key)  # type: ignore[attr-defined]
+        if spec is None:
+            self._json({"ok": False, "error": f"未找到模型：{key}"}, 404)
             return
 
         action = str(body.get("action", ""))
         try:
-            result = self.spec.run(action, body.get("params"), body.get("payload"))
+            result = spec.run(action, body.get("params"), body.get("payload"))
         except Exception as exc:      # 把模型异常回传给前端展示
             self._json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, 400)
             return
@@ -146,39 +143,49 @@ class PrismathServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, handler, model_spec: ModelSpec) -> None:
-        self.model_spec = model_spec
+    def __init__(self, address, handler, models: Dict[str, ModelSpec]) -> None:
+        self.models = models
         super().__init__(address, handler)
 
 
-def build_server(spec: ModelSpec, host: str = "127.0.0.1", port: int = 8765) -> PrismathServer:
-    """创建服务实例（端口被占用时自动向后尝试）。"""
+def build_server(models=None, host: str = "127.0.0.1", port: int = 0) -> PrismathServer:
+    """创建承载全部已注册模型的服务实例。
+
+    端口为 ``0`` 时交给操作系统选择空闲端口；显式指定端口时，冲突会
+    在附近端口中顺延，最后仍回退到随机空闲端口。
+    """
+    if models is None:
+        models = load_models()
+    if isinstance(models, ModelSpec):
+        models = load_models()
+    model_map = {model.key: model for model in models}
     local = "127.0.0.1" if host in ("localhost", "127.0.0.1", "") else host
     last_error: Optional[OSError] = None
 
     for candidate in ([port] if port == 0 else [port + i for i in range(10)] + [0]):
         try:
-            return PrismathServer((local, candidate), PrismathHandler, spec)
+            return PrismathServer((local, candidate), PrismathHandler, model_map)
         except OSError as exc:
             last_error = exc
     raise last_error if last_error else OSError("无法绑定端口")
 
 
-def _banner(spec: ModelSpec, url: str) -> None:
+def _banner(spec: Optional[ModelSpec], url: str, model_count: int) -> None:
     line = "─" * 62
     print(f"\n┌{line}┐")
-    print(f"│ 数学模型可视化 · {spec.name:<38}│")
-    print(f"│ 主题：{spec.topic:<50}│")
+    title = "模型集" if spec is None else spec.name
+    print(f"│ 数学模型可视化 · {title:<38}│")
+    print(f"│ 已加载模型：{model_count:<47}│")
     print(f"├{line}┤")
     print(f"│ 本地地址：{url:<49}│")
-    print(f"│ 提示：在网页左侧切换模型、调节参数；按 Ctrl+C 退出服务。{' ' * 9}│")
+    print(f"│ 提示：在网页中选择模型、调节参数；按 Ctrl+C 退出服务。{' ' * 9}│")
     print(f"└{line}┘\n")
 
 
 def serve(
-    spec: ModelSpec,
+    spec: Optional[ModelSpec] = None,
     host: str = "127.0.0.1",
-    port: int = 8765,
+    port: int = 0,
     open_browser: bool = True,
     desktop: bool = False,
 ) -> int:
@@ -187,10 +194,13 @@ def serve(
         print(f"缺少前端文件：{STATIC_DIR / 'index.html'}", file=sys.stderr)
         return 1
 
-    httpd = build_server(spec, host=host, port=port)
+    models = load_models()
+    httpd = build_server(models, host=host, port=port)
     bound_host, bound_port = httpd.server_address[0], httpd.server_address[1]
     url = f"http://{bound_host}:{bound_port}/"
-    _banner(spec, url)
+    if spec is not None:
+        url += f"#/model/{spec.key}"
+    _banner(spec, url, len(models))
 
     if desktop and _start_desktop_window(spec, url, httpd):
         return 0
@@ -207,7 +217,7 @@ def serve(
     return 0
 
 
-def _start_desktop_window(spec: ModelSpec, url: str, httpd: PrismathServer) -> bool:
+def _start_desktop_window(spec: Optional[ModelSpec], url: str, httpd: PrismathServer) -> bool:
     """若安装了 pywebview，则把网页装进一个独立的桌面窗口（可选增强）。"""
     try:
         import webview  # type: ignore
@@ -216,7 +226,8 @@ def _start_desktop_window(spec: ModelSpec, url: str, httpd: PrismathServer) -> b
         return False
 
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    webview.create_window(f"{spec.name} · 数学模型可视化", url, width=1480, height=940)
+    title = "模型集 · 数学模型可视化" if spec is None else f"{spec.name} · 数学模型可视化"
+    webview.create_window(title, url, width=1480, height=940)
     webview.start()
     httpd.shutdown()
     return True

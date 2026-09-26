@@ -46,12 +46,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
+from .experience import ExperienceSpec, RenderCapabilities
+
 __all__ = [
     "ParamSpec",
     "ActionSpec",
     "CliOption",
     "CliArgs",
     "ModelSpec",
+    "ExperienceSpec",
+    "RenderCapabilities",
     "normalize_params",
 ]
 
@@ -222,6 +226,10 @@ class ModelSpec:
     scan: Optional[Callable[..., Any]] = None
     highlights: Tuple[str, ...] = ()             # 门户卡片上的要点
     order: int = 100                             # 同主题内的展示顺序（越小越靠前）
+    capabilities: RenderCapabilities = field(
+        default_factory=lambda: RenderCapabilities(visual_kind="chart")
+    )
+    experience: Optional[ExperienceSpec] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """转成可 JSON 序列化的字典（不含函数，供界面层使用）。"""
@@ -237,6 +245,8 @@ class ModelSpec:
             "accent": self.accent,
             "icon": self.icon,
             "highlights": list(self.highlights),
+            "capabilities": self.capabilities.to_dict(),
+            "experience": self.experience.to_dict() if self.experience else None,
         }
 
     def run(self, action: str, params: Optional[Dict[str, Any]] = None,

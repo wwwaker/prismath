@@ -28,7 +28,7 @@ python main.py
 | `python main.py` | 桌面窗口 → **模型列表入口页**（点卡片进入某个模型） |
 | `python main.py --model percolation` | 跳过列表，直接进这个模型的窗口 |
 | `python main.py --menu` | **终端交互模式**：在命令行里依次选模型、选界面 |
-| `python main.py --list` | 列出全部模型与界面后端（含"暂时弃用"标注） |
+| `python main.py --list` | 列出全部模型与可用界面后端 |
 | `python main.py --model perc --ui cli --p 0.5 --trials 500` | 终端里跑一次批量统计 |
 | `python main.py --model percolation --ui cli --scan` | 终端里扫描 P(p) 曲线（不开窗口） |
 | `python main.py --model buffon --ui cli --ratio 0.6 --throws 5000` | 终端里投针估计 π（用自己的参数名） |
@@ -39,7 +39,7 @@ python main.py
 | `python main.py --model mandelbrot --ui cli` | 终端里出一次统计 + 一张 Mandelbrot 字符画 |
 | `python main.py --model mandelbrot --ui cli --zoom 6 --center-x -0.7436 --center-y 0.1318 --iterations 400` | 终端里看海马谷（对数倍率 + 视窗中心） |
 | `python main.py --model mandelbrot --ui cli --scan` | 终端里扫描「迭代上限 → 集合面积估计」 |
-| `python main.py --ui web` | 网页界面（**暂时弃用**，需显式指定，见下文） |
+| `python main.py --ui web` | 网页界面（浏览器中打开模型实验页） |
 | `python -m prismath.ui.tk` | 等价于 `python main.py`（直接从包内部启动桌面窗口） |
 
 `--model` 支持标识（`percolation`）、序号（`1`）与名称关键字（`perc`）。
@@ -250,7 +250,7 @@ python main.py
 | --- | --- | --- |
 | `tk` | **默认** | 桌面窗口：模型列表入口页 + 逐层动画 + 批量统计 + P(p) 曲线 |
 | `cli` | 可用 | 终端统计模式，适合批量化出数与脚本化 |
-| `web` | **暂时弃用** | 网页界面；不再出现在入口页与终端菜单里，只能 `--ui web` 显式进入（代码保留） |
+| `web` | 可用 | 网页界面；已迁移模型使用专用实验页，其余模型使用通用结果视图 |
 
 ---
 
@@ -531,8 +531,8 @@ class BuffonNeedleView(ChartViewBase):
 
 ## 已知状态
 
-* **网页后端暂时弃用**：代码保留在 `ui/web/`，把 `prismath/ui/__init__.py` 里 `web` 的
-  `deprecated` 改回 `False` 即可恢复为可选后端；
+* **网页端正在按模型迁移**：Mandelbrot、蒲丰投针、生命游戏和 N 体模型已经拥有专用实验页；
+  边渗流、点渗流暂时使用共享参数 / 结果视图，后续按产品路线补充专用交互；
 * 桌面视图层已拆成**三层骨架**：通用图表 `ChartViewBase`（声明式图表 + 动画 + 栅格图元）/
   万能 `ModelViewBase` / 渗流特化 `PercolationViewBase`，并已由 `buffon_needle` 与
   `life_game`（都用第一层，但前者是 `segments`/`series`、后者是 `grid`/`series`）以及两个
@@ -559,9 +559,6 @@ class BuffonNeedleView(ChartViewBase):
   `--model buffon --trials 5000` 这类旧命令**不会报错也不会生效**（`--trials` 仍被解析器
   接受，因为它属于渗流模型；投针模型读的是 `--throws`）。请改用
   `--model buffon --throws 5000`（另有 `--ratio` / `--repeats`）。
-* 网页端只为 `view == "percolation"` 写了专用渲染器（`ui/web/static/app.js`），所以
-  `site_percolation` / `buffon_needle` / `life_game` 在 `--ui web` 下会退化成「参数表单 +
-  动作按钮 + JSON 结果」的通用视图（web 已弃用，未投入维护）。
 * `ui/tk/kit/` 里的画布 / 面板 / 后台任务是按 mixin 拆的，它们依赖「由基类最终提供」的
   属性与相互调用的方法（`self.model`、`self.var_status`、`self._terms`、
   `self._active_view()` 等）。这些共享属性与方法已集中声明在 `kit/protocols.py` 的

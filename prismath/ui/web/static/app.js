@@ -77,6 +77,15 @@ const state = {
   // 批量统计与曲线
   scan: [],
   chartHover: null,
+
+  // 沉浸式体验
+  mode: 'explore',
+  guideStep: 0,
+  guideActive: false,
+  inspected: null,
+  fractalImage: null,
+  fractalPointer: null,
+  fractalRenderTimer: 0,
 };
 
 /* 会触发“自动重绘”的参数（其余参数只作为动作配置） */
@@ -93,7 +102,7 @@ async function boot() {
     $('#view').innerHTML = `<div class="card"><div class="body">无法连接本地服务：${err.message}</div></div>`;
     return;
   }
-  $('#footerMeta').textContent = `模型 ${state.models.length} 个 · 界面后端 ${state.uis.length} 种`;
+  $('#footerMeta').textContent = '本地数学实验';
   window.addEventListener('hashchange', route);
   document.addEventListener('keydown', shortcut);   // 只注册一次，避免路由切换后重复触发
   route();
@@ -117,6 +126,7 @@ function route() {
 }
 
 function stopAll() {
+  if (typeof stopLife === 'function') stopLife();
   state.token += 1;            // 令牌自增即可让所有异步循环在下一轮退出
   state.playing = false;
   if (state.raf) cancelAnimationFrame(state.raf);
@@ -124,6 +134,14 @@ function stopAll() {
   state.lock = null;
   state.scan = [];
   state.payload = null;
+  state.mode = 'explore';
+  state.guideStep = 0;
+  state.guideActive = false;
+  state.inspected = null;
+  state.fractalImage = null;
+  state.fractalPointer = null;
+  if (state.fractalRenderTimer) clearTimeout(state.fractalRenderTimer);
+  state.fractalRenderTimer = 0;
   // 循环退出时不会再走 finally 里的复位（令牌已变），这里显式恢复按钮状态
   lockButtons(false);
   const bs = $('#btnBatchStop');
@@ -162,21 +180,13 @@ function renderPortal() {
     </div>`).join('');
 
   $('#view').innerHTML = `
-    <section class="hero">
-      <h1>让数学模型的量变<br>看得见质变</h1>
-      <p>
-        这是一个可扩展的数学模型可视化工具箱：每个模型只描述“参数 + 计算”，
-        界面负责把它变成可交互的画面。当前页面由本地 Python 服务提供，
-        所有计算都在你自己的机器上完成。
-      </p>
-      <div class="hero-tags">
-        <span class="chip"><span class="dot"></span>模型 <b>${state.models.length}</b> 个</span>
-        <span class="chip">界面后端 <b>${state.uis.length}</b> 种</span>
-        <span class="chip">新增模型 = 新建一个包并注册，无需改动入口</span>
-      </div>
+    <section class="portal-heading">
+      <span class="eyebrow">数学实验室</span>
+      <h1>模型集</h1>
+      <p>选择一个模型，开始观察、操作和记录。</p>
     </section>
     ${sections}
-    <div class="section-title"><h2>界面后端</h2><span>同一个模型，三种打开方式</span></div>
+    <div class="section-title"><h2>打开方式</h2><span>选择一个入口开始</span></div>
     <div class="cards">${uiCards}</div>
     <div class="section-title"><h2>命令行入口</h2><span>统一入口：先选模型，再选界面</span></div>
     <div class="card"><div class="body">
@@ -206,6 +216,11 @@ function cardHTML(spec) {
 
 /* -------------------------------------------------------------- 模型页 */
 function renderModelPage(spec) {
+  const renderer = getWebRenderer(spec.view);
+  if (renderer) {
+    renderer(spec);
+    return;
+  }
   canvases = null;              // 页面重建后旧的 canvas 引用已失效
   state.spec = spec;
   state.params = {};
@@ -321,6 +336,16 @@ function renderModelPage(spec) {
 function shortcut(event) {
   if (event.target.matches('input, textarea')) return;
   const key = event.key.toLowerCase();
+  if (state.spec && state.spec.view === 'mandelbrot') {
+    if (key === 'r') { event.preventDefault(); resetMandelbrot(); }
+    if (key === 'escape') { closeConsole(); }
+    return;
+  }
+  if (state.spec && state.spec.view === 'life_game') {
+    if (key === ' ') { event.preventDefault(); state.lifePlaying ? stopLife() : playLife(); }
+    if (key === 'r') { event.preventDefault(); renderLife(); }
+    return;
+  }
   if (key === ' ') { event.preventDefault(); playPause(); }
   if (key === 'r') generate({ animate: false });
   if (key === 'f') finishInstant();
@@ -437,8 +462,11 @@ function bindParam(p) {
 }
 
 const autoRegenerate = debounce(() => {
-  if (state.spec && state.spec.view === 'percolation') generate({ animate: false });
+  if (!state.spec) return;
+  if (state.spec.view === 'percolation') generate({ animate: false });
+  if (state.spec.view === 'mandelbrot') renderMandelbrot();
 }, 220);
+
 
 /* ------------------------------------------------- 5a. 网格视图（渗流） */
 function buildPercolationView(spec) {
