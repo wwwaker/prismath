@@ -85,12 +85,11 @@ class DesktopShell:
             self._show_message("还没有注册任何模型。")
 
         root.protocol("WM_DELETE_WINDOW", self._on_close)
-        root.bind("<space>", lambda _e: self._dispatch_key(" "))
-        root.bind("<Key-r>", lambda _e: self._dispatch_key("r"))
-        # 数字键 1..9：触发当前视图的第 n 个动作（ChartViewBase 的约定；
-        # 焦点在输入框里时不转发，见 _dispatch_key）
-        for digit in "123456789":
-            root.bind(f"<Key-{digit}>", lambda _e, d=digit: self._dispatch_key(d))
+        # 所有按键都转给当前视图，由视图自己决定认哪些（约定：空格播放、R 重来、
+        # 数字键 1..9 触发第 n 个动作；具体模型还可以有别的键，例如 Mandelbrot 的
+        # ``I`` 切布局 / ``BackSpace`` 退回上一步）。**不在这里写死键名**：视图加自己的
+        # 快捷键不该反过来改外壳；未知键对既有视图是无害的（它们的 on_key 只认自己那几个）。
+        root.bind("<Key>", self._on_key_event)
 
     # ==================================================================
     # 顶部标题栏
@@ -188,6 +187,16 @@ class DesktopShell:
     # ==================================================================
     # 快捷键与关闭
     # ==================================================================
+    @staticmethod
+    def _key_text(event) -> str:
+        """把按键事件转成视图认的键名：单字符给小写字符，特殊键给 keysym（如 ``BackSpace``）。"""
+        keysym = str(getattr(event, "keysym", "") or "")
+        return keysym.lower() if len(keysym) == 1 else keysym
+
+    def _on_key_event(self, event) -> None:
+        """把按键转发给当前视图（真正的过滤在 :meth:`_dispatch_key` 里）。"""
+        self._dispatch_key(self._key_text(event))
+
     def _dispatch_key(self, key: str) -> None:
         """把快捷键转发给当前视图；正在输入框里打字时不触发。"""
         try:

@@ -39,7 +39,7 @@ from typing import Callable, Dict, List, Optional, Type
 
 from .base import ModelViewBase, PercolationViewBase
 from .canvas import CanvasMixin
-from .chart import ChartSpec, ChartViewBase
+from .chart import FIELD_LEVELS, FIELD_PAD, CMAPS, ChartSpec, ChartViewBase
 from .common import (  # noqa: F401  供模型视图直接取用
     BADGE_BAD_BG,
     BADGE_BAD_FG,
@@ -83,6 +83,10 @@ __all__ = [
     "ModelViewBase",
     "ChartViewBase",
     "ChartSpec",
+    # 连续场：色带表 + 图像四周留白（模型按画布尺寸渲染时要减掉它）
+    "CMAPS",
+    "FIELD_LEVELS",
+    "FIELD_PAD",
     "PercolationViewBase",
     "CanvasMixin",
     "SidebarMixin",
