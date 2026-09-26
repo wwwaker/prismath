@@ -9,13 +9,12 @@
 key       说明                                         依赖
 ========  ==========================================  ==============================
 ``tk``    桌面窗口（Tkinter）：模型列表入口页 + 逐层动画    tkinter（可选 matplotlib）
+``qt``    桌面窗口（PySide6）：淡色稿纸画布 + 折叠控制台  PySide6
 ``cli``   终端统计模式，适合批量化出数                  无
-``web``   现代网页界面（Canvas 动画 + 玻璃拟态配色）     Python 标准库（可选 pywebview）
 ========  ==========================================  ==============================
 
-**暂时弃用**：``web`` 后端目前不再出现在入口页与终端菜单里，只能通过
-``python main.py --ui web`` 显式进入（详见该后端的 ``note``）；默认入口是 ``tk`` 的
-模型列表页。代码保留，随时可以恢复。
+**推荐后端**：``qt`` 是默认桌面入口。它不启动浏览器，模型计算与窗口绘制均在同一个
+Python 进程内完成；``tk`` 保留给旧视图与低依赖环境。
 
 新增界面后端时，只需在 :data:`UI_BACKENDS` 中登记一个入口函数。
 入口函数签名为 ``entry(spec, args) -> int``（``spec`` 可以是 ``None``，表示"先让用户挑模型"）。
@@ -56,7 +55,7 @@ class UIBackend:
 
 
 # ----------------------------------------------------------------------
-# 各后端的入口（内部延迟导入，避免没用到 tkinter 时也去加载它）
+# 各后端的入口（内部延迟导入，避免没用到 GUI 时也加载 Qt / tkinter）
 # ----------------------------------------------------------------------
 def _run_web(spec: Optional[ModelSpec], args) -> int:
     if spec is None:
@@ -79,6 +78,13 @@ def _run_tk(spec: Optional[ModelSpec], args) -> int:
     return launch(spec)
 
 
+def _run_qt(spec: Optional[ModelSpec], args) -> int:
+    """PySide6 桌面窗口：淡色稿纸风格的单列沉浸式工作台。"""
+    from .qt import launch
+
+    return launch(spec, args)
+
+
 def _run_cli(spec: Optional[ModelSpec], args) -> int:
     if spec is None or spec.cli is None:
         raise RuntimeError("终端模式需要指定一个提供了 cli 入口的模型（用 --model 选择）")
@@ -86,10 +92,17 @@ def _run_cli(spec: Optional[ModelSpec], args) -> int:
 
 
 UI_BACKENDS: Dict[str, UIBackend] = {
+    "qt": UIBackend(
+        key="qt",
+        name="Qt 桌面窗口",
+        summary="推荐入口：淡色数学稿纸舞台、彩色渗流动画、可折叠控制台与高级选项",
+        entry=_run_qt,
+        requires=("PySide6",),
+    ),
     "tk": UIBackend(
         key="tk",
         name="桌面窗口",
-        summary="默认入口：先显示模型列表，点卡片进入逐层动画、批量统计与曲线",
+        summary="兼容入口：Tk 模型列表与旧桌面视图",
         entry=_run_tk,
         requires=("tkinter（Python 自带）", "matplotlib（可选，用于曲线）"),
     ),
@@ -99,22 +112,13 @@ UI_BACKENDS: Dict[str, UIBackend] = {
         summary="不开窗口，直接在命令行输出概率统计与扫描表格",
         entry=_run_cli,
     ),
-    "web": UIBackend(
-        key="web",
-        name="现代网页界面",
-        summary="浏览器中运行，Canvas 逐层动画 + 实时曲线，配色与交互最完整",
-        entry=_run_web,
-        requires=("无（可选 pywebview 以获得独立窗口）",),
-        deprecated=True,
-        note="暂时弃用：不再出现在入口页与终端菜单里，仅可用 --ui web 显式进入",
-    ),
 }
 
 
 def get_ui(key: str) -> UIBackend:
     """按 key 取界面后端；也支持用名称模糊匹配。
 
-    暂时弃用的后端（如 ``web``）同样可以取到——这正是"只能显式进入"的实现方式。
+    已移除的网页后端不会出现在入口注册表中；历史资源仍保留在仓库中供参考。
     """
     text = str(key).strip().lower()
     if text in UI_BACKENDS:

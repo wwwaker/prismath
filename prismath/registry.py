@@ -88,9 +88,6 @@ def all_models() -> List[ModelSpec]:
 
 def load_models(force: bool = False) -> List[ModelSpec]:
     """导入 ``prismath.models`` 下的所有子包以触发注册。"""
-    if not force and _MODELS:
-        return all_models()
-
     package = importlib.import_module("prismath.models")
     for module in pkgutil.iter_modules(package.__path__):
         if module.name.startswith("_"):

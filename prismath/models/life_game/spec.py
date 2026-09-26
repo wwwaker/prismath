@@ -407,13 +407,22 @@ def frame_payload(board: LifeBoard, view: str = "life-grid",
 # ----------------------------------------------------------------------
 # 动作处理器
 # ----------------------------------------------------------------------
-def _handle_run(params: Dict[str, Any]) -> Dict[str, Any]:
+def _handle_run(params: Dict[str, Any], payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """按参数重新播种并演化一次，返回界面用的 payload。
 
     界面参数在这里翻成内部取值（:func:`options_from_ui`）—— 数据级契约的入参永远是
     "界面上的样子"，而模型只认内部取值。
     """
-    board, run = run_board(options_from_ui(params))
+    internal = options_from_ui(params)
+    if payload and payload.get("cells"):
+        # Qt 画布允许从空白棋盘手绘开局；载入后仍走同一个 LifeBoard.run，
+        # 因而周期判定和终端路径保持一致。
+        board = build_board(internal)
+        board.load(str(payload.get("cells")))
+        board.pattern = PATTERN_BLANK
+        run = board.run(_resolve_generations(internal.get("generations")))
+    else:
+        board, run = run_board(internal)
     return payload_for(board, run)
 
 
@@ -424,7 +433,7 @@ def handle(action: str, params: Dict[str, Any], payload: Dict[str, Any]) -> Dict
     由桌面视图直接改棋盘 → :func:`frame_payload`），保留它是为了与统一签名一致。
     """
     if action == "evolve":
-        return _handle_run(params)
+        return _handle_run(params, payload)
     raise ValueError(f"生命游戏模型不支持的动作：{action}")
 
 

@@ -5,7 +5,7 @@
 
 * **一个模型 = 一个目录**：新增模型只加目录，不改任何已有文件；
 * **界面可更换**：模型只负责计算与数据结构，不关心渲染方式；
-* **默认入口是桌面窗口**：`python main.py` 先给出一张模型列表，点卡片进入。
+* **默认入口是 Qt 桌面窗口**：`python main.py` 先给出一张淡色数学稿纸风格的模型列表，点卡片进入。
 
 ---
 
@@ -39,7 +39,7 @@ python main.py
 | `python main.py --model mandelbrot --ui cli` | 终端里出一次统计 + 一张 Mandelbrot 字符画 |
 | `python main.py --model mandelbrot --ui cli --zoom 6 --center-x -0.7436 --center-y 0.1318 --iterations 400` | 终端里看海马谷（对数倍率 + 视窗中心） |
 | `python main.py --model mandelbrot --ui cli --scan` | 终端里扫描「迭代上限 → 集合面积估计」 |
-| `python main.py --ui web` | 网页界面（**暂时弃用**，需显式指定，见下文） |
+| `python main.py --ui qt` | Qt 桌面界面（默认；不启动浏览器） |
 | `python -m prismath.ui.tk` | 等价于 `python main.py`（直接从包内部启动桌面窗口） |
 
 `--model` 支持标识（`percolation`）、序号（`1`）与名称关键字（`perc`）。
@@ -248,9 +248,10 @@ python main.py
 
 | key | 状态 | 说明 |
 | --- | --- | --- |
-| `tk` | **默认** | 桌面窗口：模型列表入口页 + 逐层动画 + 批量统计 + P(p) 曲线 |
+| `qt` | **默认** | PySide6 桌面窗口：淡色稿纸舞台、折叠控制台、彩色渗流动画 |
+| `tk` | 兼容 | 旧 Tk 桌面窗口与既有模型视图 |
 | `cli` | 可用 | 终端统计模式，适合批量化出数与脚本化 |
-| `web` | **暂时弃用** | 网页界面；不再出现在入口页与终端菜单里，只能 `--ui web` 显式进入（代码保留） |
+| `web` | 已移除 | 旧网页资源保留作历史参考，默认入口和命令行均不再使用 |
 
 ---
 
@@ -296,7 +297,7 @@ prismath/
 │       ├── spec.py              参数 / 动作 / view / cli_options / factory / payload
 │       └── views/tk.py          桌面视图（继承 ChartViewBase，kind="grid" 连续场）
 └── ui/                          界面后端
-    ├── __init__.py              后端注册表（tk / cli / web）
+    ├── __init__.py              后端注册表（qt / tk / cli）
     ├── tk/                      桌面窗口（默认）
     │   ├── __main__.py          支持 python -m prismath.ui.tk
     │   ├── shell.py             窗口外壳：模型下拉框 + 「☰ 模型列表」+ 视图切换
@@ -315,7 +316,11 @@ prismath/
     │       ├── jobs.py          后台任务（批量统计 / 曲线扫描）
     │       ├── common.py        术语表、结果归一化、共享配色与工具
     │       └── __init__.py      视图注册表（按约定自动发现）
-    └── web/                     网页界面（暂时弃用，代码保留）
+    ├── qt/                      默认 Qt 外框（稿纸舞台 / 折叠控制台 / 舞台协议）
+    └── web/                     历史网页资源（不在入口注册）
+
+模型的 Qt 专用视图放在各自的 `models/<model>/views/qt/` 目录；Qt 外框只负责导航、
+参数抽屉与通用控件。详见 `docs/qt-view-extension.md`。
 ```
 
 **三条硬规则**（改代码时请遵守）：
@@ -531,8 +536,8 @@ class BuffonNeedleView(ChartViewBase):
 
 ## 已知状态
 
-* **网页后端暂时弃用**：代码保留在 `ui/web/`，把 `prismath/ui/__init__.py` 里 `web` 的
-  `deprecated` 改回 `False` 即可恢复为可选后端；
+* **网页资源不参与入口**：`ui/web/` 仅保留作历史参考；默认桌面入口是 `qt`，旧 Tk
+  视图仍可通过 `--ui tk` 使用；
 * 桌面视图层已拆成**三层骨架**：通用图表 `ChartViewBase`（声明式图表 + 动画 + 栅格图元）/
   万能 `ModelViewBase` / 渗流特化 `PercolationViewBase`，并已由 `buffon_needle` 与
   `life_game`（都用第一层，但前者是 `segments`/`series`、后者是 `grid`/`series`）以及两个
@@ -559,9 +564,8 @@ class BuffonNeedleView(ChartViewBase):
   `--model buffon --trials 5000` 这类旧命令**不会报错也不会生效**（`--trials` 仍被解析器
   接受，因为它属于渗流模型；投针模型读的是 `--throws`）。请改用
   `--model buffon --throws 5000`（另有 `--ratio` / `--repeats`）。
-* 网页端只为 `view == "percolation"` 写了专用渲染器（`ui/web/static/app.js`），所以
-  `site_percolation` / `buffon_needle` / `life_game` 在 `--ui web` 下会退化成「参数表单 +
-  动作按钮 + JSON 结果」的通用视图（web 已弃用，未投入维护）。
+* Qt 端为两个渗流模型提供专用彩色分层画布，其余模型先使用统一结果舞台；后续可按视觉
+  范式逐个增加专用画布，而不改变模型内核契约。
 * `ui/tk/kit/` 里的画布 / 面板 / 后台任务是按 mixin 拆的，它们依赖「由基类最终提供」的
   属性与相互调用的方法（`self.model`、`self.var_status`、`self._terms`、
   `self._active_view()` 等）。这些共享属性与方法已集中声明在 `kit/protocols.py` 的
