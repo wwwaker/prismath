@@ -5,7 +5,7 @@
 
 * :mod:`~prismath.ui.tk.shell` —— 窗口外壳：顶部模型下拉框 + 「☰ 模型列表」+ 视图切换
 * :mod:`~prismath.ui.tk.portal` —— **模型列表入口页**（``python main.py`` 的首屏）
-* :mod:`~prismath.ui.tk.theme` —— 深色扁平主题（配色 / 字体 / ttk 样式）
+* :mod:`~prismath.ui.tk.theme` —— 浅色纸张主题（配色 / 字体 / ttk 样式）
 * :mod:`~prismath.ui.tk.kit` —— 桌面界面工具箱：与模型无关的共享骨架 + 视图注册表
 
 **本包不含任何具体模型的界面代码**：模型的桌面视图放在模型自己的包里

@@ -68,7 +68,7 @@ prismath/
     ├── tk/
     │   ├── shell.py             窗口外壳：模型下拉框 + 门户 + 视图切换
     │   ├── portal.py            模型列表入口页
-    │   ├── theme.py             深色扁平主题
+   │   ├── theme.py             浅色纸张主题
     │   └── kit/                 桌面工具箱
     │       ├── base.py          ModelViewBase + PercolationViewBase
     │       ├── chart.py         ChartViewBase + ChartSpec

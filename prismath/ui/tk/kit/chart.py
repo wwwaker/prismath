@@ -122,12 +122,12 @@ _BADGE_COLORS = {
 CMAPS: Mapping[str, Tuple[Tuple[int, int, int], Tuple[int, int, int]]] = {
     "viridis": ((68, 1, 84), (253, 231, 37)),      # #440154 -> #fde725（深紫 -> 亮黄）
     "magma": ((0, 0, 4), (252, 253, 191)),         # #000004 -> #fcfdbf（黑 -> 暖白）
-    "ice": ((12, 17, 24), (126, 231, 255)),        # #0c1118 -> #7ee7ff（暗底 -> 冰蓝）
+    "ice": ((226, 242, 254), (14, 165, 233)),      # 浅蓝底 -> 冰蓝
     "heat": ((26, 11, 11), (255, 209, 102)),       # #1a0b0b -> #ffd166（暗红 -> 亮黄）
 }
 
 #: 栅格图细格线（``ChartSpec.grid_lines``）的颜色：比画布底色略亮，只用于读坐标
-GRID_LINE_COLOR = "#22303f"
+GRID_LINE_COLOR = "#cbd5e1"
 
 #: 连续场的色带档数：数值先量化成这么多档再查色带（与旧的逐像素实现一致）
 FIELD_LEVELS = 64
@@ -200,7 +200,7 @@ class ChartSpec:
     col_field: str = "cols"
     frames: str = "frames"
     cells: str = "cells"
-    #: 状态 -> 颜色（下标即取值，如 ``("#0c1118", "#4ade80")``；缺省时用 ``color`` / ``flag_color``）
+    #: 状态 -> 颜色（下标即取值；缺省时用 ``color`` / ``flag_color``）
     colors: Tuple[str, ...] = ()
     #: 格子之间的像素间隙（0 = 紧贴；差分刷新不受它影响）
     gap: int = 1
@@ -223,10 +223,10 @@ class ChartSpec:
     ylim: Optional[Tuple[float, float]] = None
     grid: Optional[float] = None
     # ---- 外观 ----
-    color: str = "#93a1b3"
+    color: str = "#64748b"
     flag_color: Optional[str] = None
-    ref_color: str = "#4ade80"
-    grid_color: str = "#334155"
+    ref_color: str = "#15803d"
+    grid_color: str = "#cbd5e1"
     limit: int = 3000
     animate: bool = False
     #: 这张图的指标行取值来源（覆盖视图级的 ``ROW_SOURCES``）

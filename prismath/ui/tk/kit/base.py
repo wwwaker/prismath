@@ -55,6 +55,7 @@ from ..theme import (
     BG,
     DIM,
     FAINT,
+    FONT_MONO,
     PANEL,
     WARN,
     ScrollArea,
@@ -236,8 +237,8 @@ class ModelViewBase(ParamFormMixin, ViewContract):
         ttk.Label(center, text="运行结果", style="Card.TLabel").grid(
             row=0, column=0, sticky="w", pady=(0, 8))
         self.output = tk.Text(
-            center, bg=PANEL, fg="#e6edf6", insertbackground="#e6edf6", relief="flat",
-            wrap="none", padx=10, pady=8,
+            center, bg=PANEL, fg="#172033", insertbackground="#172033", relief="flat",
+            wrap="none", padx=10, pady=8, font=FONT_MONO,
         )
         self.output.grid(row=1, column=0, sticky="nsew")
         self._render_result({"提示": "点击左侧动作按钮，用当前参数运行一次；结果以 JSON 显示。"})
@@ -485,7 +486,9 @@ class PercolationViewBase(JobsMixin, SidebarMixin, ResultPanelMixin, CanvasMixin
         self._redraw_curve()
         # 定时任务句柄要留着：视图被切换 / 关闭时必须取消，
         # 否则挂起的回调会继续访问已经销毁的画布（TclError）。
-        self._first_job = self.root.after(60, self.regenerate)
+        # 排队到下一轮 Tk 事件循环即可；固定等待 60ms 会让首次打开时画布短暂为空，
+        # 在高 DPI 或窗口刚布局完成时尤其容易被用户看到。
+        self._first_job = self.root.after(0, self.regenerate)
 
     # ==================================================================
     # 参数与事件

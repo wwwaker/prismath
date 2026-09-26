@@ -34,6 +34,7 @@ from .theme import (
     FAINT,
     FONT_SM,
     FONT_TITLE,
+    enable_windows_dpi_awareness,
     install_theme,
     polish_comboboxes,
 )
@@ -124,7 +125,7 @@ class DesktopShell:
         self.combo.bind("<<ComboboxSelected>>", self._on_model_selected)
         ttk.Button(inner, text="☰ 模型列表", command=self.show_portal).pack(
             side="left", padx=(10, 0))
-        polish_comboboxes(header)     # 让弹出列表也是暗色（否则会露出系统白底）
+        polish_comboboxes(header)     # 让弹出列表也沿用浅色主题
 
         tk.Frame(header, bg=BORDER, height=1).pack(fill="x")
 
@@ -226,6 +227,9 @@ def launch(spec: Optional[ModelSpec] = None, **_kwargs) -> int:
     # 依赖自检：`python -m prismath.ui.tk` 不经过 launcher，得在这里自己拦一次
     # （依赖齐全时是一次零输出的轻量探测）。
     exit_if_missing()
+    # 必须在创建 Tk 根窗口之前设置 DPI 感知，否则 Windows 会把整个界面
+    # 位图缩放，文字和画布都会显得发糊。
+    enable_windows_dpi_awareness()
     root = tk.Tk()
     install_theme(root)
     DesktopShell(root, spec)

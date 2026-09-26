@@ -53,15 +53,15 @@ MAX_SIZE = 80
 THRESHOLD_CHOICES = ("0.3", "0.5", "0.7", "0.9")
 
 # ---------------- 两个视图逐字相同的配色（画布与结论） ----------------
-BG_CANVAS = "#0c1118"        # 画布底色
-COL_SPAN_FILL = "#12433c"    # 纵贯簇（顶行 ↔ 底行连通的簇）的填充
-COL_SPAN_EDGE = "#2dd4bf"    # 纵贯簇描边（两个模型一致，便于对照）
-COL_VERDICT_OK = "#4ade80"   # 结论「成立」
-COL_VERDICT_NO = "#fb7185"   # 结论「不成立」
-BADGE_OK_BG, BADGE_OK_FG = "#2b2340", "#c4b5fd"    # 结论徽章：成功
-BADGE_NO_BG, BADGE_NO_FG = "#131c28", "#93c5fd"    # 结论徽章：未成功
-BADGE_BAD_BG, BADGE_BAD_FG = "#331420", "#fb7185"  # 结论徽章：无法判定（如没有注水点）
-TREE_OK, TREE_NO = "#4ade80", "#fb7185"            # 历史记录表格的成功 / 失败行
+BG_CANVAS = "#ffffff"        # 画布底色
+COL_SPAN_FILL = "#d1fae5"    # 纵贯簇（顶行 ↔ 底行连通的簇）的填充
+COL_SPAN_EDGE = "#0f766e"    # 纵贯簇描边（两个模型一致，便于对照）
+COL_VERDICT_OK = "#15803d"   # 结论「成立」
+COL_VERDICT_NO = "#be123c"   # 结论「不成立」
+BADGE_OK_BG, BADGE_OK_FG = "#ede9fe", "#6d28d9"    # 结论徽章：成功
+BADGE_NO_BG, BADGE_NO_FG = "#eff6ff", "#1d4ed8"    # 结论徽章：未成功
+BADGE_BAD_BG, BADGE_BAD_FG = "#fff1f2", "#be123c"  # 结论徽章：无法判定（如没有注水点）
+TREE_OK, TREE_NO = "#15803d", "#be123c"            # 历史记录表格的成功 / 失败行
 
 
 # ----------------------------------------------------------------------

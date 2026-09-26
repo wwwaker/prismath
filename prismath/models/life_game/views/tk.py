@@ -64,10 +64,10 @@ from ..spec import build_board, frame_payload, live_payload, options_from_ui, ou
 # 配色与尺寸
 # ----------------------------------------------------------------------
 #: 活细胞（与模型主题色一致）
-COL_ALIVE = "#4ade80"
+COL_ALIVE = "#16a34a"
 #: 人口曲线与其坐标轴
-COL_CURVE = "#38bdf8"
-COL_AXIS = "#22303f"
+COL_CURVE = "#0284c7"
+COL_AXIS = "#cbd5e1"
 #: 人口曲线的画布高度（宽度跟随右侧面板）
 CURVE_HEIGHT = 148
 #: 曲线上最多画多少个点（代数再多也只做抽样，避免每帧都遍历整条历史）

@@ -36,7 +36,7 @@ class CanvasMixin(ViewContract):
     """中央画布 + 动画 + 图例 + 结论。"""
 
     #: 图例里圆点的描边色（子类覆盖：边渗流用节点描边、点渗流用格子描边）
-    LEGEND_EDGE = "#0a0e13"
+    LEGEND_EDGE = "#334155"
     #: 图例里线条的粗细
     LEGEND_LINE_WIDTH = 3
     #: 画布左上角配置说明的颜色
@@ -323,7 +323,10 @@ class CanvasMixin(ViewContract):
         """画布尺寸变化后重绘（防抖，避免拖动窗口时频繁重绘）。"""
         if self._redraw_job is not None:
             self.root.after_cancel(self._redraw_job)
-        self._redraw_job = self.root.after(120, self._redraw_grid)
+        # 首次布局时立即画出底图；否则模型已经算完但窗口刚创建时，
+        # 画布会在防抖的 120ms 内保持空白，自动化检查和用户都可能刚好看到它。
+        delay = 0 if not self._node_items else 120
+        self._redraw_job = self.root.after(delay, self._redraw_grid)
 
     # ==================================================================
     # 交给子类的钩子

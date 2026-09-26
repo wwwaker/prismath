@@ -3,14 +3,16 @@
 桌面界面的主题（配色 / 字体 / ttk 样式）
 ==========================================
 
-深色扁平风：近黑底 + 细边框 + 单一强调色。所有 ttk 控件都从这里取色，
-各视图（渗流、森林火灾）共用同一套调色板，只在「模型强调色」上有所区别。
+浅色纸张风：柔和的灰白底 + 清晰的边框 + 单一强调色。所有 ttk 控件都从这里取色，
+各视图共用同一套调色板，只在「模型强调色」上有所区别。
 """
 
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
+import os
+import ctypes
 from typing import Optional, Tuple
 
 __all__ = [
@@ -38,6 +40,7 @@ __all__ = [
     "FONT_MONO",
     "FONT_MONO_B",
     "lerp_color",
+    "enable_windows_dpi_awareness",
     "install_theme",
     "make_accent_button",
     "polish_comboboxes",
@@ -48,31 +51,31 @@ __all__ = [
 # ----------------------------------------------------------------------
 # 调色板
 # ----------------------------------------------------------------------
-BG = "#0f141b"          # 窗口底色
-PANEL = "#151c26"       # 卡片 / 面板底
-PANEL_2 = "#1d2634"     # 输入框 / 按钮底
-BORDER = "#26313f"      # 细边框
-BORDER_2 = "#35455c"    # 悬停边框
-TEXT = "#e6edf6"        # 主文字
-DIM = "#93a1b5"         # 次要文字
-FAINT = "#66748f"       # 弱化文字
-ACCENT = "#38bdf8"      # 默认强调色
-ACCENT_TEXT = "#06283a"  # 强调色按钮上的深色文字
-SEL_BG = "#1d3a52"      # 列表 / 表格选中行
-BTN_HOVER = "#273242"
-BTN_ACTIVE = "#2f3c50"
-OK = "#34d399"
-WARN = "#fbbf24"
-DANGER = "#fb7185"
+BG = "#f4f7fb"          # 窗口底色
+PANEL = "#ffffff"       # 卡片 / 面板底
+PANEL_2 = "#eef3f8"     # 输入框 / 按钮底
+BORDER = "#d3dce8"      # 细边框
+BORDER_2 = "#8ea4bd"    # 悬停边框
+TEXT = "#172033"        # 主文字
+DIM = "#475569"         # 次要文字
+FAINT = "#64748b"       # 弱化文字
+ACCENT = "#0879c9"      # 默认强调色
+ACCENT_TEXT = "#ffffff" # 强调色按钮上的文字
+SEL_BG = "#dbeafe"      # 列表 / 表格选中行
+BTN_HOVER = "#e2e8f0"
+BTN_ACTIVE = "#cbd5e1"
+OK = "#15803d"
+WARN = "#b45309"
+DANGER = "#be123c"
 
 # ----------------------------------------------------------------------
 # 字体
 # ----------------------------------------------------------------------
-FONT = ("Microsoft YaHei UI", 10)
-FONT_SM = ("Microsoft YaHei UI", 9)
-FONT_BOLD = ("Microsoft YaHei UI", 10, "bold")
-FONT_TITLE = ("Microsoft YaHei UI", 14, "bold")
-FONT_BADGE = ("Microsoft YaHei UI", 12, "bold")
+FONT = ("Microsoft YaHei UI", 11)
+FONT_SM = ("Microsoft YaHei UI", 10)
+FONT_BOLD = ("Microsoft YaHei UI", 11, "bold")
+FONT_TITLE = ("Microsoft YaHei UI", 16, "bold")
+FONT_BADGE = ("Microsoft YaHei UI", 13, "bold")
 FONT_MONO = ("Consolas", 10)
 FONT_MONO_B = ("Consolas", 10, "bold")
 
@@ -86,8 +89,38 @@ def lerp_color(start: Tuple[int, int, int], end: Tuple[int, int, int], t: float)
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def enable_windows_dpi_awareness() -> None:
+    """让 Tk 在 Windows 上按显示器的真实 DPI 创建窗口。"""
+    if os.name != "nt":
+        return
+    try:
+        # Per-monitor DPI aware v2，Windows 10 及更新版本优先使用。
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+def _sync_tk_scaling(root: tk.Tk) -> None:
+    """用 Tk 识别到的屏幕 DPI 设置缩放，避免高分屏文字发糊或过小。"""
+    try:
+        dpi = float(root.winfo_fpixels("1i"))
+        if dpi > 0:
+            root.tk.call("tk", "scaling", dpi / 72.0)
+    except (tk.TclError, TypeError, ValueError):
+        pass
+
+
 def install_theme(root: tk.Tk) -> None:
-    """在 clam 主题上定制一套深色扁平样式（所有控件共用同一调色板）。"""
+    """在 clam 主题上定制一套浅色样式，并同步高 DPI 缩放。"""
+    _sync_tk_scaling(root)
     style = ttk.Style(root)
     try:
         style.theme_use("clam")
@@ -146,10 +179,10 @@ def install_theme(root: tk.Tk) -> None:
          foreground=[("disabled", FAINT)],
          bordercolor=[("disabled", BORDER)])
 
-    cfg("Danger.TButton", background="#3d2029", foreground="#fda4af",
-        bordercolor="#5b2a35", padding=(12, 6))
+    cfg("Danger.TButton", background="#fff1f2", foreground="#be123c",
+        bordercolor="#fecdd3", padding=(12, 6))
     smap("Danger.TButton",
-         background=[("pressed", "#57222f"), ("active", "#4a222d"), ("disabled", PANEL_2)],
+         background=[("pressed", "#ffe4e6"), ("active", "#ffe4e6"), ("disabled", PANEL_2)],
          foreground=[("disabled", FAINT)],
          bordercolor=[("disabled", BORDER)])
 
@@ -216,12 +249,17 @@ def _rgb(color: str) -> Tuple[int, int, int]:
     return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
 
 
-def make_accent_button(root: tk.Tk, accent: str, text_color: str = ACCENT_TEXT) -> str:
+def make_accent_button(root: tk.Tk, accent: str, text_color: Optional[str] = None) -> str:
     """为一个模型创建专属的强调按钮样式，返回样式名（供 ``ttk.Button(style=...)``）。
 
     这样渗流用青色、森林火灾用橙色，各视图的主按钮各不相同又风格统一。
     """
     style = ttk.Style(root)
+    if text_color is None:
+        red, green, blue = _rgb(accent)
+        # 明亮的模型强调色配深字，深色强调色配白字，避免浅蓝 / 黄 / 绿按钮上的文字发虚。
+        brightness = (299 * red + 587 * green + 114 * blue) / 1000
+        text_color = TEXT if brightness >= 165 else ACCENT_TEXT
     name = f"Accent{accent.lstrip('#')}.TButton"
     hover = lerp_color(_rgb(accent), (255, 255, 255), 0.32)   # 悬停时略微提亮
     pressed = lerp_color(_rgb(accent), (0, 0, 0), 0.22)       # 按下时略微压暗
@@ -238,10 +276,10 @@ def make_accent_button(root: tk.Tk, accent: str, text_color: str = ACCENT_TEXT) 
 
 
 def _style_popdown(combo: ttk.Combobox) -> None:
-    """把下拉框的弹出列表也刷成暗色。
+    """把下拉框的弹出列表也刷成浅色。
 
     ``option_add("*TCombobox*Listbox...")`` 在部分 Tk 版本／主题下不生效，
-    会露出系统白色底，因此这里在控件创建后再显式配置一遍（弹出窗口会顺手被创建）。
+    会露出与主题不一致的系统底色，因此这里在控件创建后再显式配置一遍。
     """
     def call(*args) -> None:
         try:
@@ -322,7 +360,7 @@ class ScrollArea:
         self.canvas.itemconfigure(self._window, width=event.width)
 
     def bind_wheel(self) -> None:
-        """内容构建完成后调用：滚轮随处可用，并把下拉框弹出列表也刷成暗色。"""
+        """内容构建完成后调用：滚轮随处可用，并同步下拉框弹出列表样式。"""
         bind_mousewheel(self.inner, self.canvas)
         self.canvas.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(
             -2 if getattr(e, "delta", 0) > 0 else 2, "units"))

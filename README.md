@@ -301,7 +301,7 @@ prismath/
     │   ├── __main__.py          支持 python -m prismath.ui.tk
     │   ├── shell.py             窗口外壳：模型下拉框 + 「☰ 模型列表」+ 视图切换
     │   ├── portal.py            模型列表入口页
-    │   ├── theme.py             深色扁平主题（配色 / 字体 / ttk 样式）
+    │   ├── theme.py             浅色纸张主题（配色 / 字体 / ttk 样式）
     │   └── kit/                 桌面界面工具箱：通用图表 / 万能 / 渗流特化 三层骨架
     │       ├── base.py          ModelViewBase（万能骨架）+ PercolationViewBase（渗流特化）
     │       ├── chart.py         ChartViewBase：通用图表骨架（声明式图表 + 逐帧动画

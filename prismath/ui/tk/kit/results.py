@@ -240,7 +240,8 @@ class ResultPanelMixin(ViewContract):
             self.figure_canvas = None
             return
 
-        self.figure = Figure(figsize=(4.3, 3.4), dpi=100, facecolor=PANEL)
+        # 100 dpi 的固定位图在高分屏上会被放大，曲线和中文会显得发糊。
+        self.figure = Figure(figsize=(4.3, 3.4), dpi=120, facecolor=PANEL)
         self.ax = self.figure.add_subplot(111)
         self.figure_canvas = FigureCanvasTkAgg(self.figure, master=tab)
         self.figure_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
@@ -255,7 +256,7 @@ class ResultPanelMixin(ViewContract):
         toolbar.grid(row=1, column=0, sticky="ew")
 
     def _style_ax(self) -> None:
-        """把坐标轴刷成暗色（clear 之后需要重新设置）。"""
+        """把坐标轴刷成浅色主题（clear 之后需要重新设置）。"""
         if self.ax is None:
             return
         ax = self.ax
@@ -294,7 +295,7 @@ class ResultPanelMixin(ViewContract):
                 label="成功概率 (%)",
             )
             ax.plot(
-                xs, ratio, "--", color="#7dd3fc", lw=1.5,
+                xs, ratio, "--", color="#0284c7", lw=1.5,
                 label=terms.curve_ratio_label,
             )
             # p_c 只属于贯通判据：其他判据下这条线画出来只会误导
@@ -309,8 +310,8 @@ class ResultPanelMixin(ViewContract):
             ax.set_ylabel("百分比 (%)", fontsize=9)
             ax.set_xlim(0, 1)
             ax.set_ylim(-3, 103)
-            ax.grid(color="#22303f", lw=0.8, ls=":")
-            ax.tick_params(labelsize=8)
+            ax.grid(color="#cbd5e1", lw=0.8, ls=":")
+            ax.tick_params(labelsize=9)
             ax.legend(
                 loc="upper left", fontsize=8,
                 facecolor=PANEL_2, edgecolor=BORDER, labelcolor=TEXT,
@@ -330,7 +331,7 @@ class ResultPanelMixin(ViewContract):
                 pc_note = (f" = {pc:.4f}）" if pc is not None else " 未知）")
                 title += (f"\n1/2 交点 = {cross:.3f}（有限尺寸 + 长宽比决定；理论 p_c"
                           + pc_note)
-            ax.set_title(title, fontsize=9, color=TEXT)
+            ax.set_title(title, fontsize=10, color=TEXT)
             if pc is not None and prob and max(prob) >= 100 and min(prob) <= 0:
                 ax.annotate(
                     "相变：量变引起质变",
