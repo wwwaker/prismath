@@ -23,6 +23,7 @@ Mandelbrot 集模型 —— 界面元数据与动作处理器
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -31,6 +32,7 @@ import numpy as np
 from ...spec import ActionSpec, CliArgs, CliOption, ModelSpec, ParamSpec
 from .model import (
     AREA_REFERENCE,
+    BACKENDS,
     DEFAULT_ASPECT,
     DEFAULT_CENTER_X,
     DEFAULT_CENTER_Y,
@@ -153,6 +155,10 @@ CLI_OPTIONS = (
         help="色带：" + " / ".join(PALETTES),
     ),
     CliOption(
+        ("--backend",), kind="choice", choices=BACKENDS,
+        help="计算后端：numpy（默认）/ numba（可选依赖）/ auto（大图自动选择）",
+    ),
+    CliOption(
         ("--scan",), kind="flag",
         help="扫描：逐级调高迭代上限，看集合面积估计怎么收敛（不开窗口）",
     ),
@@ -195,6 +201,14 @@ def _pick_palette(value: Any) -> str:
     return DEFAULT_PALETTE
 
 
+def _pick_backend(value: Any) -> str:
+    """显式参数优先，其次环境变量；未配置时保持 NumPy。"""
+    name = str(value or os.environ.get("PRISMATH_MANDELBROT_BACKEND") or "numpy").strip().lower()
+    if name not in BACKENDS:
+        raise ValueError(f"未知的 Mandelbrot 计算后端：{name!r}（可选：{' / '.join(BACKENDS)}）")
+    return name
+
+
 def _resolve_magnification(value: Any) -> float:
     """放大倍率的对数：负值表示比默认取景更宽（缩小），两端都夹在允许区间里。"""
     return _clamp(_num(value, 0.0) or 0.0, MIN_MAGNIFICATION, MAX_MAGNIFICATION)
@@ -228,6 +242,8 @@ def options_from_ui(params: Dict[str, Any]) -> Dict[str, Any]:
         "iterations": _clamp_int(params.get("iterations"), 0, MAX_ITERATIONS, 0),
         "pixels": _clamp_int(params.get("pixels"), MIN_PIXELS, MAX_PIXELS, DEFAULT_PIXELS),
         "palette": _pick_palette(params.get("palette")),
+        # Tk 不增加控件；可以通过环境变量或调用参数显式启用加速。
+        "backend": _pick_backend(params.get("backend")),
     }
 
 
@@ -253,6 +269,7 @@ def build_mandelbrot(params: Dict[str, Any]) -> Mandelbrot:
         max_iter=_clamp_int(params.get("iterations"), 0, MAX_ITERATIONS, 0),
         pixels=_clamp_int(params.get("pixels"), MIN_PIXELS, MAX_PIXELS, DEFAULT_PIXELS),
         aspect=_num(params.get("aspect"), DEFAULT_ASPECT) or DEFAULT_ASPECT,
+        backend=_pick_backend(params.get("backend")),
     )
 
 
@@ -365,6 +382,7 @@ def _cli(raw_args) -> int:
     iterations = _clamp_int(args.iterations, 0, MAX_ITERATIONS, 0)      # 0 = 自动
     pixels = _clamp_int(args.pixels, MIN_PIXELS, MAX_PIXELS, DEFAULT_PIXELS)
     palette = _pick_palette(args.palette)
+    backend = _pick_backend(args.backend)
     center_x = _resolve_center(getattr(args, "center_x", None), DEFAULT_CENTER_X, CENTER_X_RANGE)
     center_y = _resolve_center(getattr(args, "center_y", None), DEFAULT_CENTER_Y, CENTER_Y_RANGE)
     span = _resolve_span(getattr(args, "span", None), getattr(args, "zoom", 0.0))
@@ -380,7 +398,7 @@ def _cli(raw_args) -> int:
         print("-" * 78)
         for limit, result in scan_iterations(list(_SCAN_LIMITS), center_x=center_x,
                                              center_y=center_y, span=span,
-                                             pixels=_SCAN_PIXELS):
+                                             pixels=_SCAN_PIXELS, backend=backend):
             print(f"{limit:>10} | {result.inside_count:>10} | "
                   f"{result.inside_ratio:>10.4f} | {result.area:>10.6f} | "
                   f"{result.elapsed * 1000:>7.1f} ms")
@@ -392,7 +410,7 @@ def _cli(raw_args) -> int:
         return 0
 
     model = build_mandelbrot({"center_x": center_x, "center_y": center_y, "span": span,
-                              "iterations": iterations, "pixels": pixels})
+                              "iterations": iterations, "pixels": pixels, "backend": backend})
     field = model.render()
     print("=" * 78)
     print(f"Mandelbrot 集 | {field.view_text} | 色带：{PALETTE_LABELS[palette]}")
@@ -407,7 +425,8 @@ def _cli(raw_args) -> int:
     print(f" | 渲染耗时 {field.elapsed * 1000:.1f} ms")
 
     art_model = build_mandelbrot({"center_x": center_x, "center_y": center_y, "span": span,
-                                  "iterations": iterations, "pixels": ASCII_COLS})
+                                  "iterations": iterations, "pixels": ASCII_COLS,
+                                  "backend": backend})
     art_model.rows = int(round(ASCII_COLS * ASCII_ASPECT))     # 终端字符 ≈ 2:1 的高宽比
     art = _ascii_field(art_model.render())
     print()

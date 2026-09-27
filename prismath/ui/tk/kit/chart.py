@@ -251,6 +251,10 @@ class ChartViewBase(ModelViewBase):
     #: 动画固定帧数（帧数固定，于是"动画间隔"滑块调的就是快慢）
     ANIM_STEPS: int = 48
     SPEED_MIN, SPEED_MAX, SPEED_DEFAULT = 1, 200, 25
+    #: 某些高采样动画允许 ``after(0, ...)`` 尽快刷新；默认模型仍保留 1 ms 下限。
+    ALLOW_ZERO_ANIM_DELAY: bool = False
+    #: 是否在播放完时间轴后自动从第 1 帧重新开始。
+    LOOP_ANIMATION: bool = False
 
     # ==================================================================
     # 状态
@@ -588,18 +592,32 @@ class ChartViewBase(ModelViewBase):
         self._frame_index, self._frame_count = self._reveal - 1, target
         self._draw(self._chart, self._last, self._reveal)
         self._fill_rows(self._last, drawn=self._reveal)
-        delay = max(1, min(self.SPEED_MAX, int(self.var_speed.get())))
+        floor = 0 if self.ALLOW_ZERO_ANIM_DELAY else 1
+        delay = max(floor, min(self.SPEED_MAX, int(self.var_speed.get())))
         self._anim_job = self.root.after(delay, self._step_animation)
 
     def _finish_animation(self) -> None:
         self._cancel_animation()
-        self.var_playing.set(False)
-        self._sync_player_buttons()
         if self._last is None:
+            self.var_playing.set(False)
+            self._sync_player_buttons()
             return
         if self._chart is not None:
             self._draw(self._chart, self._last)
         self._fill_rows(self._last)
+        if (self.LOOP_ANIMATION and self._chart is not None
+                and self._chart.animate and self._anim_target > 0 and self._alive):
+            # 保留完整末帧一小段事件循环后再回到起点，避免视觉上出现半帧残留。
+            self._reveal = 0
+            self._frame_index, self._frame_count = -1, self._anim_target
+            self.var_playing.set(True)
+            self._sync_player_buttons()
+            floor = 0 if self.ALLOW_ZERO_ANIM_DELAY else 1
+            delay = max(floor, min(self.SPEED_MAX, int(self.var_speed.get())))
+            self._anim_job = self.root.after(delay, self._step_animation)
+            return
+        self.var_playing.set(False)
+        self._sync_player_buttons()
 
     def _cancel_animation(self) -> None:
         if self._anim_job is not None:
@@ -729,6 +747,32 @@ class ChartViewBase(ModelViewBase):
 
         scale, ox, oy = self._fit(xlim, ylim)
         self._scale, self._origin = scale, (ox, oy)
+
+        # 线段图原本只画图元，没有使用 ChartSpec 里已经声明的轴标题，导致
+        # 分岔图这类“坐标本身就是含义”的图很难读。边框和标题不改变图元
+        # 坐标，只补充方向感；自由布局类线段图（如投针）也能直接受益。
+        plot_left = ox + xlim[0] * scale
+        plot_right = ox + xlim[1] * scale
+        plot_top = oy + ylim[0] * scale
+        plot_bottom = oy + ylim[1] * scale
+        self.canvas.create_rectangle(plot_left, plot_top, plot_right, plot_bottom,
+                                     outline=spec.grid_color)
+        if spec.y_label:
+            self.canvas.create_text(plot_left + 4, plot_top + 4, anchor="nw",
+                                    text=spec.y_label, fill=FAINT, font=FONT_SM)
+        if spec.x_label:
+            self.canvas.create_text((plot_left + plot_right) / 2.0,
+                                    plot_bottom + 2, anchor="n",
+                                    text=spec.x_label, fill=FAINT, font=FONT_SM)
+        # 端点刻度让自动范围的图也能读出数值（尤其是分岔图的 r 区间）。
+        self.canvas.create_text(plot_left, plot_bottom + 2, anchor="sw",
+                                text=f"{xlim[0]:g}", fill=DIM, font=FONT_SM)
+        self.canvas.create_text(plot_right, plot_bottom + 2, anchor="se",
+                                text=f"{xlim[1]:g}", fill=DIM, font=FONT_SM)
+        self.canvas.create_text(plot_left - 4, plot_top, anchor="e",
+                                text=f"{ylim[0]:g}", fill=DIM, font=FONT_SM)
+        self.canvas.create_text(plot_left - 4, plot_bottom, anchor="e",
+                                text=f"{ylim[1]:g}", fill=DIM, font=FONT_SM)
 
         if spec.grid:
             step = float(spec.grid)

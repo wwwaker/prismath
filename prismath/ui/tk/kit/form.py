@@ -19,6 +19,7 @@
 ``int``               标题 + 数字输入框（范围取 ``min``/``max``，步进取 ``step``）
 ``bool``              复选框
 ``choice``            只读下拉框（候选取 ``choices``）
+``str`` / ``path``    单行文本输入框
 ====================  ==========================================================
 
 任何控件变动都会回调 :meth:`ParamFormMixin._on_param_change`（子类可覆盖以做实时重绘 / 防抖）。
@@ -189,6 +190,8 @@ class ParamFormMixin:
             widget = self._add_choice_row(card, param, var)
         elif param.kind == "int":
             widget = self._add_int_row(card, param, var)
+        elif param.kind in ("str", "path", "text"):
+            widget = self._add_text_row(card, param, var)
         else:
             widget = self._add_float_row(card, param, var)
 
@@ -230,6 +233,16 @@ class ParamFormMixin:
         spin.bind("<Return>", lambda _e, k=param.key: self._on_param_change(k))
         spin.bind("<FocusOut>", lambda _e, k=param.key: self._on_param_change(k))
         return spin
+
+    def _add_text_row(self, card: tk.Misc, param: ParamSpec,
+                      var: tk.Variable) -> ttk.Entry:
+        """单行文本输入；路径等字符串参数由模型自行校验。"""
+        ttk.Label(card, text=param.label, style="Card.TLabel").pack(anchor="w")
+        entry = ttk.Entry(card, textvariable=var)
+        entry.pack(fill="x", pady=(2, 6))
+        entry.bind("<Return>", lambda _e, k=param.key: self._on_param_change(k))
+        entry.bind("<FocusOut>", lambda _e, k=param.key: self._on_param_change(k))
+        return entry
 
     def _add_float_row(self, card: tk.Misc, param: ParamSpec,
                        var: tk.Variable) -> ttk.Scale:

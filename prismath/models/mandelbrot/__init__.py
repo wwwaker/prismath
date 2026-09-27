@@ -20,6 +20,8 @@ from .model import (  # noqa: F401  便于外部直接引用
     AREA_REFERENCE,
     AUTO_ITERATIONS_BASE,
     AUTO_ITERATIONS_SLOPE,
+    BACKENDS,
+    NUMBA_AUTO_MIN_POINTS,
     DEFAULT_ASPECT,
     DEFAULT_CENTER_X,
     DEFAULT_CENTER_Y,
@@ -53,6 +55,8 @@ from .model import (  # noqa: F401  便于外部直接引用
     iterations_for,
     make_viewport,
     mandelbrot_levels,
+    numba_available,
+    resolve_backend,
     resample_to,
     scan_iterations,
 )
@@ -62,6 +66,10 @@ SPEC = register(build_spec())
 
 __all__ = [
     "SPEC",
+    "BACKENDS",
+    "NUMBA_AUTO_MIN_POINTS",
+    "numba_available",
+    "resolve_backend",
     "DEFAULT_CENTER_X",
     "DEFAULT_CENTER_Y",
     "DEFAULT_SPAN",

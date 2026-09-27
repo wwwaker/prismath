@@ -89,7 +89,7 @@ class Bench:
         print(f"微基准：{self.title}")
         print("=" * 80)
         print(environment())
-        print("口径：每项取 repeat 次的中位数（已预热）；波动大 = 这个数字不可信，别写进文档。")
+        print("口径：默认预热后取 repeat 次中位数；首次调用项单独注明，± 为极差。")
         print("-" * 80)
         width = max([len(row[0]) for row in self._rows] + [8])
         for label, value, spread, note in self._rows:
@@ -253,30 +253,41 @@ def bench_n_body() -> None:
 
 
 def bench_mandelbrot() -> None:
-    from prismath.models.mandelbrot.model import Mandelbrot, scan_iterations
+    from prismath.models.mandelbrot.model import Mandelbrot, numba_available, scan_iterations
 
-    bench = Bench("Mandelbrot 集内核（逃逸时间迭代就是全部成本）")
-    bench.case("默认取景 360×270 · 200 次迭代",
-               Mandelbrot(max_iter=200).render, unit="次")
-    bench.case("默认取景 360×270 · 200 次迭代 + 色带下标列表",
+    bench = Bench("Mandelbrot · NumPy / 可选 Numba（含网格、迭代和统计；不含界面绘制）")
+    backends = ["numpy"]
+    if numba_available():
+        bench.case("Numba · 本进程首次 · 默认 360×270 ×200",
+                   Mandelbrot(max_iter=200, backend="numba").render, repeat=1, warmup=0,
+                   note="含导入、编译或磁盘缓存加载；此项不预热，不计入加速比")
+        import numba
+        print(f"Numba {numba.__version__} · {numba.get_num_threads()} threads · "
+              "首次项已有磁盘缓存时会复用；删除缓存前后不是同一口径")
+        backends.append("numba")
+    else:
+        print("未安装可选依赖 Numba，仅测 NumPy。安装：python -m pip install numba")
+
+    cases = [
+        ("默认 360×270 · 200 次", dict(max_iter=200)),
+        ("默认 360×270 · 2000 次", dict(max_iter=2000)),
+        ("海马谷 360×270 · 宽0.05 · 400 次",
+         dict(max_iter=400, center_x=-0.743643887, center_y=0.131825904, span=0.05)),
+        ("深放大 360×270 · 宽0.0002 · 1000 次",
+         dict(max_iter=1000, center_x=-0.743643887, center_y=0.131825904, span=0.0002)),
+        ("默认 720×540 · 200 次", dict(pixels=720, max_iter=200)),
+        ("海马谷 360×270 · 宽0.001 · 自动迭代",
+         dict(center_x=-0.743643887, center_y=0.131825904, span=0.001, max_iter=0)),
+    ]
+    for label, kwargs in cases:
+        for backend in backends:
+            name = "NumPy" if backend == "numpy" else "Numba 预热后"
+            bench.case(f"{name} · {label}", Mandelbrot(**kwargs, backend=backend).render)
+
+    bench.case("NumPy · 默认取景 360×270 · 200 次迭代 + 色带下标列表",
                lambda: Mandelbrot(max_iter=200).render().level_values(), unit="次",
                note="画布点一次拿到的就是这么一份")
-    bench.case("默认取景 360×270 · 2000 次迭代",
-               Mandelbrot(max_iter=2000).render, unit="次", repeat=3,
-               note="迭代上限越高，成本越集中在贴近边界的那些像素上")
-    bench.case("海马谷 360×270（宽 0.05）· 400 次迭代",
-               Mandelbrot(max_iter=400, center_x=-0.743643887, center_y=0.131825904,
-                          span=0.05).render,
-               unit="次", repeat=3, note="一大半像素属于集合：活动集收缩得最慢")
-    bench.case("深放大 360×270（宽 0.0002）· 1000 次迭代",
-               Mandelbrot(max_iter=1000, center_x=-0.743643887, center_y=0.131825904,
-                          span=0.0002).render,
-               unit="次", repeat=3)
-    bench.case("海马谷（宽 0.001）· 迭代上限**自动**",
-               lambda: Mandelbrot(center_x=-0.743643887, center_y=0.131825904,
-                                  span=0.001, max_iter=0).render(),
-               unit="次", repeat=3, note="max_iter=0 = 按放大倍率自动给（界面默认）")
-    bench.case("迭代上限扫描 8 档（160×120）",
+    bench.case("NumPy · 迭代上限扫描 8 档（160×120）",
                lambda: scan_iterations([10, 20, 50, 100, 200, 500, 1000, 2000], pixels=160),
                unit="次", repeat=1, warmup=0, note="终端 --scan 的那张表")
     bench.report()

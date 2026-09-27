@@ -39,6 +39,9 @@ python main.py
 | `python main.py --model mandelbrot --ui cli` | 终端里出一次统计 + 一张 Mandelbrot 字符画 |
 | `python main.py --model mandelbrot --ui cli --zoom 6 --center-x -0.7436 --center-y 0.1318 --iterations 400` | 终端里看海马谷（对数倍率 + 视窗中心） |
 | `python main.py --model mandelbrot --ui cli --scan` | 终端里扫描「迭代上限 → 集合面积估计」 |
+| `python main.py --model logistic_map --ui cli --r 3.2` | 终端里查看固定参数下的 Logistic Map 轨道 |
+| `python main.py --model logistic_map --ui cli --scan` | 终端里扫描 Logistic Map 分岔图 |
+| `python main.py --model henon_map --ui cli` | 终端里查看 Hénon Map 混沌吸引子 |
 | `python main.py --ui web` | 网页界面（**暂时弃用**，需显式指定，见下文） |
 | `python -m prismath.ui.tk` | 等价于 `python main.py`（直接从包内部启动桌面窗口） |
 
@@ -60,10 +63,34 @@ python main.py
 | `percolation` | ≋ 边渗流模型 | 量变引起质变 | 方格网 p_c = 0.5、三角网 ≈ 0.3473、有向 ≈ 0.6447 |
 | `site_percolation` | ▦ 点渗流模型 | 量变引起质变 | 方格网 p_c ≈ 0.5927、三角网 0.5 |
 | `mandelbrot` | ❋ Mandelbrot 集模型 | 分形与自相似 | z → z² + c 的逃逸时间：面积 ≈ 1.5066、共轭对称逐点相等、边界处处自相似 |
+| `logistic_map` | ∿ Logistic Map 模型 | 确定性与混沌 | xₙ₊₁ = r·xₙ·(1−xₙ)：固定点、倍周期分岔与混沌 |
+| `henon_map` | ◈ Hénon Map 模型 | 确定性与混沌 | a=1.4、b=0.3 的折叠带状吸引子，最大 Lyapunov 指数约 0.42 |
+| `fourier_epicycles` | ◎ Fourier Epicycles 模型 | 信号与几何 | DFT 把轮廓分成旋转向量，用末端轨迹重绘心形、星形等曲线 |
+| `linear_transform` | ↗ 线性变换实验室 | 课堂与直觉 | 拖动向量，观察矩阵如何改变网格、基向量、面积与方向 |
+| `projectile_motion` | ↗ 抛体运动实验室 | 课堂与直觉 | 比较理想抛体和空气阻力下的飞行时间、最高点与射程 |
+| `gradient_descent` | ∇ 梯度下降实验室 | 课堂与直觉 | 把导数变成逐步下坡路径，观察学习率与局部最小值 |
+| `probability_lab` | ∑ 概率实验室 | 概率与统计 | 用同一组随机实验观察大数定理、中心极限定理和高尔顿钉板 |
 
 两个**渗流类**模型（边渗流 / 点渗流）都支持：方形 / 矩形区域、方格网 / 三角网、四种方向
 模式（无向、不允许向上、只允许向下向右、只允许向下向左）、三种注水方式，以及三种成功判据
 + 批量统计 + 曲线扫描。
+
+`henon_map` 首屏直接显示经典参数下的相图，点击「稳定点」可比较收敛后的单点结构。
+「查看时间轨道」用两种颜色展示最后 80 个连续状态，Lyapunov 指数使用完整采样估计。
+支持参数与初值调整；超出数值范围时停止并提示恢复经典参数。沿用 Tk，未增加依赖。
+直接打开：`python main.py --model henon_map`。CLI 可用
+`--a / --b / --henon-x0 / --henon-y0 / --henon-iterations / --henon-discard` 调参，
+加 `--orbit` 可打印末尾的时间轨道。
+
+`fourier_epicycles` 首屏显示一串嵌套旋转圆：圆半径来自傅里叶系数的模长，旋转速度来自频率，
+末端点沿粉色轨迹运动。降低「旋转向量数」可以观察低频近似，增加它可以恢复更多轮廓细节。
+动画帧数默认 360，现支持最多 36000 帧；提高帧数会让末端轨迹采样和播放更细腻，但不会增加傅里叶近似的几何精度；几何精度主要由旋转向量数和轮廓采样点决定。
+内置曲线包括心形、星形、花瓣、圆形和李萨如曲线；还加入了由示例图片校验得到的“示例图片轮廓”预设。
+选择“图片轮廓”后可在 Tk 界面选择 PNG/JPG 图片，程序会优先用 OpenCV GrabCut 提取外轮廓，
+没有 OpenCV 时回退到 Pillow/NumPy 的自适应阈值分割。命令行也可用
+`--epicycle-shape image --epicycle-image <图片路径>`。
+直接打开：`python main.py --model fourier_epicycles`。CLI 可用
+`--epicycle-shape / --epicycle-image / --epicycle-samples / --epicycle-terms / --epicycle-frames` 调参。
 
 `buffon_needle` 是**非渗流**模型（随机投针估计 π）：它走**通用图表骨架**（`ChartViewBase`，
 图表只写声明），参数表单由
@@ -71,6 +98,18 @@ python main.py
 效果**：针从零开始逐根出现（左侧**顶部**的「动画」卡片可调速，播放中可暂停 / 单步），
 右侧的命中率与 π 估计随针数实时刷新。它同时是"接入一个不同范式的模型"的参考实现
 （见下文「新增一个模型」）。
+
+`probability_lab` 把三个常见的概率课题放在同一块实验板上：
+
+* **大数定理**：样本平均值逐步靠近理论均值，播放时可以暂停在任意样本数；
+* **中心极限定理**：重复生成“样本的平均值”，直方图与橙色正态近似曲线叠加；
+* **高尔顿钉板**：每个小球经过若干层时随机向左 / 向右，底部落点逐渐长成二项分布。
+
+实验支持硬币、骰子、均匀分布和标准正态分布。固定随机种子可以复现实验，增大样本数能观察
+随机波动如何缩小。直接打开：`python main.py --model probability_lab`。
+
+`gradient_descent` 的函数预设还包括 `sin(x) + 0.15x²`、带波纹的二次函数、六次多势阱和
+光滑绝对值函数。它们适合比较“局部最小值”和“学习率过大时的震荡”，不再局限于一条抛物线。
 
 `life_game` 是本项目的**第一个栅格类模型**（元胞自动机）：每个格子只看周围 8 格，按
 `B3/S23` 同时更新（活细胞有 2~3 个邻居就存活，死细胞恰好 3 个邻居才新生）。
@@ -227,6 +266,54 @@ python main.py
 所以"按窗口大小渲染"是**拿时间换清晰度**：想更快就缩小窗口（成本与像素数成正比），
 想更深就接受那零点几秒 —— 反正拖动是实时的、预览是立刻的。
 
+### Mandelbrot 可选 Numba 后端
+
+保留 NumPy 为默认 CPU 后端，增加可选 Numba 多核加速。Tk 布局、操作方式和返回的数据结构
+保持兼容；只有选中 Numba 时才加载它。安装与终端试用：
+
+```powershell
+python -m pip install numba
+python main.py --model mandelbrot --ui cli --backend numba
+python main.py --model mandelbrot --ui cli --backend numba --scan
+```
+
+在现有 Tk 界面中启用（PowerShell，仅影响当前终端启动的程序）：
+
+```powershell
+$env:PRISMATH_MANDELBROT_BACKEND = "numba"
+python main.py --model mandelbrot
+```
+
+将环境变量改为 `"numpy"` 即可恢复默认计算方式。API 可以直接使用
+`Mandelbrot(backend="numba")`、`escape_counts(points, backend="numba")` 或
+`scan_iterations([...], backend="numba")`。缩放和更换取景会保留后端选择。
+界面工厂 / CLI 的优先级为：显式参数 > `PRISMATH_MANDELBROT_BACKEND` > `numpy`；
+直接调用计算 API 的默认值始终是 `numpy`。
+
+| 选择 | 行为 |
+| --- | --- |
+| `numpy` | 默认；无需 Numba，也不会导入或编译它 |
+| `numba` | 显式启用；未安装时给出安装提示；编译结果缓存到磁盘 |
+| `auto` | 实际计算点数 ≥ 100,000 且能找到 Numba 时启用，否则使用 NumPy；实轴对称视图按半幅点数计算 |
+
+`auto` 的点数阈值是保守策略，不保证每个取景都更快；首次启用仍有导入和编译 / 缓存加载
+开销。因此安装后不会自动切换 Tk 的默认后端。Numba 沿用 float64、解析判据和色带公式，
+不启用 `fastmath`；测试要求逃逸次数和色带一致，平滑值只允许浮点舍入误差。
+
+2026-09-26 本机实测：Windows AMD64、Python 3.13.9、NumPy 2.3.5、Numba 0.62.1，
+16 个 Numba 线程。以下为预热后 5 次中位数，括号为极差；包含网格生成、计算和统计，
+**不含 Tk 绘图**，深放大时 NumPy 波动较大：
+
+| 取景 | NumPy | Numba 预热后 |
+| --- | --- | --- |
+| 默认 360×270，200 次迭代 | 16.7 ms（4.6 ms） | 3.2 ms（1.3 ms） |
+| 默认 720×540，200 次迭代 | 131.9 ms（32.1 ms） | 11.0 ms（1.1 ms） |
+| 深放大 360×270，宽 0.0002，1000 次 | 156.2 ms（50.2 ms） | 8.1 ms（1.5 ms） |
+
+同次基准的进程首次调用约 **1.02 秒**，包含导入和已有编译缓存的加载；没有缓存时还需
+编译，不能用首次耗时计算上述加速比。复现：`python -m tests.bench mandelbrot`；输出会
+分别列出首次调用与预热后的结果。没有安装 Numba 时基准只跑 NumPy。
+
 ### 三种「成功判据」不是一回事（本项目最容易误解的地方）
 
 | 判据 | 回答的问题 | 曲线与 50% 的交点 |
@@ -290,11 +377,30 @@ prismath/
 │   │   ├── spec.py              参数 / 动作 / view / cli_options / factory+batch+scan
 │   │   └── views/tk.py          桌面视图（继承 PercolationViewBase）
 │   ├── site_percolation/        点渗流（结构同上）
-│   └── mandelbrot/              Mandelbrot 集（分形 / 连续场：色带 + 点击放大）
-│       ├── __init__.py          register(spec)：导入本包即完成注册
-│       ├── model.py             纯计算内核（逃逸时间 + 解析子集 + 视窗几何 + 面积统计）
-│       ├── spec.py              参数 / 动作 / view / cli_options / factory / payload
-│       └── views/tk.py          桌面视图（继承 ChartViewBase，kind="grid" 连续场）
+│   ├── mandelbrot/              Mandelbrot 集（分形 / 连续场：色带 + 点击放大）
+│   │   ├── __init__.py          register(spec)：导入本包即完成注册
+│   │   ├── model.py             纯计算内核（逃逸时间 + 解析子集 + 视窗几何 + 面积统计）
+│   │   ├── spec.py              参数 / 动作 / view / cli_options / factory / payload
+│   │   └── views/tk.py          桌面视图（继承 ChartViewBase，kind="grid" 连续场）
+│   ├── logistic_map/            Logistic Map（轨道曲线 + 分岔图）
+│   │   ├── __init__.py          register(spec)：导入本包即完成注册
+│   │   ├── model.py             纯计算内核（轨道迭代 + Lyapunov 指数 + 分岔采样）
+│   │   ├── spec.py              参数 / 动作 / view / cli_options / factory / payload
+│   │   └── views/tk.py          桌面视图（继承 ChartViewBase，曲线 + 线段点云）
+│   ├── henon_map/               Hénon Map（相图 + 时间轨道）
+│   │   ├── __init__.py          register(spec)：导入本包即完成注册
+│   │   ├── model.py             纯计算内核（二次映射 + 最大 Lyapunov 指数 + 数值保护）
+│   │   ├── spec.py              参数 / 动作 / view / cli_options / factory / payload
+│   │   └── views/tk.py          桌面视图（继承 ChartViewBase，像素散点 + 双色短轨道）
+│   ├── fourier_epicycles/       Fourier Epicycles（嵌套圆 + 旋转向量 + 画笔轨迹）
+│   │   ├── __init__.py          register(spec)：导入本包即完成注册
+│   │   ├── model.py             纯计算内核（轮廓采样 + DFT + 傅里叶级数重建）
+│   │   ├── spec.py              参数 / 动作 / view / cli_options / factory / payload
+│   │   └── views/tk.py          桌面视图（继承 ChartViewBase，专用动态画布）
+│   ├── linear_transform/        Linear Transform（网格 / 基向量 / 拖动向量）
+│   ├── projectile_motion/       Projectile Motion（理想轨迹 / 空气阻力）
+│   ├── gradient_descent/        Gradient Descent（函数曲线 / 逐步下坡）
+│   ├── probability_lab/         Probability Lab（大数 / 中心极限 / 高尔顿钉板）
 └── ui/                          界面后端
     ├── __init__.py              后端注册表（tk / cli / web）
     ├── tk/                      桌面窗口（默认）
@@ -337,6 +443,9 @@ prismath/
 | --- | --- | --- |
 | `numpy` | **必需** | 全部模型的计算内核（向量化演化 / 批量统计 / 并查集扫描 / 随机场），以及界面侧连续场的整块位图 |
 | `matplotlib` | 可选 | 曲线页（渗流的 P(p) 曲线等）；缺失时该页显示提示，其余功能照常 |
+| `Pillow` | **必需** | Fourier Epicycles 图片读取与轮廓输入预处理 |
+| `opencv-python` | **必需** | Fourier Epicycles 的 GrabCut 主体轮廓提取 |
+| `numba` | 可选，单独安装 | Mandelbrot CPU 加速；默认不启用，见上文安装和选择方式 |
 | `pywebview` | 可选 | 网页后端想要独立窗口时用（web 后端已暂时弃用） |
 
 安装：`pip install -r requirements.txt`。
@@ -362,7 +471,7 @@ prismath/
 ## 测试与基准
 
 ```powershell
-python -m unittest discover -s tests -t .     # 全量测试（当前 187 条，约 60 s；视图那几条要真开窗口，机器忙时会明显更久）
+python -m unittest discover -s tests -t .     # 全量测试（含可选 Numba 测试；视图测试需要图形环境，缺可选依赖时跳过对应测试）
 python -m tests.bench                         # 各模型的微基准（中位数 + 波动 + 环境行）
 python -m tests.bench life_game               # 只跑一个模型
 python -m tests._harness --update <模型>      # 重新生成金样本（谨慎，见下）
@@ -373,10 +482,10 @@ python -m tests._harness --update <模型>      # 重新生成金样本（谨慎
 | 文件 | 管什么 |
 | --- | --- |
 | `tests/test_golden.py` + `tests/golden/<模型>.txt` | **金样本**：各模型的 `python -m prismath.models.<模型>.model` 自检输出**逐字比对**。自检输出是确定性的（连跑两次逐字相同），所以能用最严格的方式比 —— 改内核后这里变红，先问"这个变化是有意的吗" |
-| `tests/test_life_game.py` 等六份单元测试 | 教材结论与契约断言：纯整数结论（方块 / 闪烁器 / 脉冲星 / 滑翔机位移）**精确相等**；统计量**固定种子 + 容差**。渗流的两份还带**等价性护栏**：邻居/边表必须与几何逐条一致、向量化推进必须与朴素 BFS 同集合同分层、并查集与 BFS 必须同答案、`bytes` 掩码必须与分类型边表互相对得上；`n_body` 那份钉住守恒量（动量到 1e-12）、开普勒第三定律、辛积分器的二阶收敛（比值 3–5.5）、"误差有界不漂移"，以及**视图交互**（滚轮缩放保持光标下的世界点不动、拖动平移、选中星体并拖动、质量滑块对数映射与重锚基准、能量曲线滑动窗口铺满横轴） |
+| `tests/test_life_game.py` 等模型单元测试 | 教材结论与契约断言：纯整数结论（方块 / 闪烁器 / 脉冲星 / 滑翔机位移）**精确相等**；统计量**固定种子 + 容差**。渗流的两份还带**等价性护栏**：邻居/边表必须与几何逐条一致、向量化推进必须与朴素 BFS 同集合同分层、并查集与 BFS 必须同答案、`bytes` 掩码必须与分类型边表互相对得上；`n_body` 那份钉住守恒量，Logistic Map 那份钉住固定点、周期 2、Lyapunov 指数和分岔采样。 |
 | `tests/test_views_smoke.py` | **视图无头冒烟**：按外壳的真实路径真开一个窗口、建出视图，断言画布上真有图元（没有图形环境时自动跳过）。这一层专盯"骨架与内核之间的参数契约" —— 内核测试一个窗口都不建，所以漏过一次"进模型一片空白"（见 `docs` §6.2） |
 | `tests/bench.py` | 微基准 —— **文档里所有性能数字的唯一来源**（中位数 + 预热 + 波动范围） |
-| `tests/_harness.py` | 金样本读写 + 差异报告 + `--update`；每次刷新都要在文件顶部写一句"为什么"（已有 life_game / buffon_needle / site_percolation / percolation / n_body / mandelbrot 六条记录） |
+| `tests/_harness.py` | 金样本读写 + 差异报告 + `--update`；每次刷新都要在文件顶部写一句"为什么"（已有七条模型记录） |
 
 两条纪律：**性能数字只写实测值并注明复现命令**；波动大的用例（例如小 N 的投针、Windows 上的单代计时）
 不要往文档里写 —— `bench` 会把波动一并打出来，就是为了让人一眼看出哪个数字不可信。

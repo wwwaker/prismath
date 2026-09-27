@@ -82,6 +82,10 @@ COL_ACCENT = "#f472b6"
 #: 它是 :attr:`MandelbrotView.MAX_RENDER_PIXELS` 的默认值（测试会把它压小）。
 DEFAULT_MAX_RENDER_PIXELS = 1_100_000
 
+# 首屏先出一张轻量预览，再在同一个后台任务里细化到最终分辨率。这个上限只影响
+# 首次显示，不影响最终图像质量；用户看到画面的等待时间主要由它决定。
+BOOTSTRAP_MAX_RENDER_PIXELS = 180_000
+
 #: 参数改动后的（延迟）重渲染间隔：连拖滑块时只渲染最后停下的那一处
 DEFAULT_RENDER_DELAY = 320
 
@@ -204,6 +208,9 @@ class MandelbrotView(ChartViewBase):
         #: 只记 values 不记取景，连点两下之后就会拿"老图"当"新取景下的图"来映射（曾经真的错过）。
         self._values: Optional[np.ndarray] = None
         self._values_view: Optional[Viewport] = None
+        #: 首屏低分辨率预览的临时源；清晰图到达后立即丢弃。
+        self._preview_values: Optional[np.ndarray] = None
+        self._preview_values_view: Optional[Viewport] = None
         #: 当前屏幕上那张图是**按多大尺寸**渲染的；窗口尺寸变了才值得重渲染
         self._rendered_size: Optional[Tuple[int, int]] = None
         #: 沉浸式布局（画布铺满，参数面板收起来）—— 可切换，见 DEFAULT_IMMERSIVE
@@ -238,7 +245,8 @@ class MandelbrotView(ChartViewBase):
         if self.canvas.winfo_width() < MIN_PIXELS:
             self._first_job = self.root.after(30, self._render_when_ready)
             return
-        self.run_action("render")
+        params = dict(self.current_params())
+        self._start_render(params, target_view(params, "render"), "render", bootstrap=True)
 
     def _bind_zoom_events(self) -> None:
         """补上基类没绑的鼠标交互：右键缩小、滚轮缩放、松开左键收尾。
@@ -305,7 +313,7 @@ class MandelbrotView(ChartViewBase):
     # ==================================================================
     # 画布尺寸 -> 渲染分辨率
     # ==================================================================
-    def _render_size(self) -> Tuple[int, int]:
+    def _render_size(self, max_pixels: Optional[int] = None) -> Tuple[int, int]:
         """按画布可用区域定渲染分辨率（连续场会把它等比铺满，留白见 ``FIELD_PAD``）。
 
         两道上限：单边不超过 ``MAX_PIXELS``、总数不超过 :attr:`MAX_RENDER_PIXELS`
@@ -316,8 +324,10 @@ class MandelbrotView(ChartViewBase):
         height = self.canvas.winfo_height() - 2 * FIELD_PAD
         if width < MIN_PIXELS or height < 2:
             return DEFAULT_COLS, DEFAULT_ROWS
+        pixel_limit = self.MAX_RENDER_PIXELS if max_pixels is None else min(
+            self.MAX_RENDER_PIXELS, max(1, int(max_pixels)))
         cols = min(float(width), float(MAX_PIXELS),
-                   math.sqrt(self.MAX_RENDER_PIXELS * width / height))
+                   math.sqrt(pixel_limit * width / height))
         cols = max(cols, float(MIN_PIXELS))
         return int(round(cols)), max(2, int(round(cols * height / width)))
 
@@ -344,13 +354,22 @@ class MandelbrotView(ChartViewBase):
         return payload_for(model.render(), opts["palette"], as_array=True)
 
     def _start_render(self, params: Mapping[str, Any], view: Viewport,
-                      action: str = "render", throttle: bool = False) -> None:
+                      action: str = "render", throttle: bool = False,
+                      bootstrap: bool = False) -> None:
         """换一个取景去渲染：能预览就先预览（几毫秒），清晰的那张丢到后台算。
 
         **为什么放后台**：一屏像素的内核开销是几百毫秒，同步渲染会让窗口冻住（连"正在
         细化"都画不出来）。代号（``_generation``）负责作废过期结果 —— 连点几下放大时，
         只有最后一次会被采用。``throttle`` 给滚轮用：连滚时少画几次预览。
         """
+        # 用户在首屏定时任务触发前主动操作时，取消那次待处理的首屏渲染，
+        # 避免同时启动两张相同取景的后台图。
+        if self._first_job is not None:
+            try:
+                self.root.after_cancel(self._first_job)
+            except tk.TclError:
+                pass
+            self._first_job = None
         self._apply_view_params(view)
         request = {**params, "center_x": view.center_x, "center_y": view.center_y,
                    "magnification": view.magnification}
@@ -365,11 +384,20 @@ class MandelbrotView(ChartViewBase):
         self._generation += 1
         generation = self._generation
         size = self._render_size()          # 画布尺寸只能在主线程问
+        preview_size = self._render_size(BOOTSTRAP_MAX_RENDER_PIXELS) if bootstrap else None
         #: 线程闭包只抓这些**纯数据**（连 self 都别抓：见 _render_payload 的说明）
         render, queue = self._render_payload, self._queue
 
         def job() -> None:
             try:
+                if preview_size is not None:
+                    quick = render(request, view, preview_size)
+                    quick["preview"] = True
+                    quick["inside"] = quick["escaped"] = None
+                    quick["insideRatio"] = quick["area"] = None
+                    quick["meanEscape"] = quick["elapsedMs"] = None
+                    quick["viewText"] = f"{view.label()} · 正在细化…"
+                    queue.put(("render-preview", (generation, quick)))
                 result = render(request, view, size)
             except Exception as exc:        # 后台线程里出错也要报出来，而不是静悄悄
                 queue.put(("render-error", f"{type(exc).__name__}: {exc}"))
@@ -391,7 +419,8 @@ class MandelbrotView(ChartViewBase):
         （预览会"飞"到别处，等清晰图到了再跳回来）。
         """
         payload = self._last
-        values, source = self._values, self._values_view
+        values = self._values if self._values is not None else self._preview_values
+        source = self._values_view if self._values_view is not None else self._preview_values_view
         if values is None or source is None or not isinstance(payload, Mapping):
             return None
         if "error" in payload:
@@ -419,6 +448,19 @@ class MandelbrotView(ChartViewBase):
 
     def _handle_message(self, kind: str, payload: Any) -> None:
         """后台渲染的结果：只采用最新那一次。"""
+        if kind == "render-preview":
+            generation, result = payload
+            if self._alive and generation == self._generation:
+                # 首屏低分辨率图只用于尽快让用户看到内容；不要把它记成预览源，
+                # 否则随后缩放会从低分辨率图继续放大，清晰度会逐步变差。
+                values = result.get("values")
+                if isinstance(values, np.ndarray):
+                    self._preview_values = values.reshape(int(result["rows"]), int(result["cols"]))
+                    self._preview_values_view = make_viewport(
+                        result.get("centerX"), result.get("centerY"), result.get("span"))
+                self._redraw_payload(result)
+                self.var_status.set("正在细化…（先显示预览，清晰图随后换上）")
+            return
         if kind == "render-done":
             generation, result = payload
             if not self._alive or generation != self._generation:
@@ -438,6 +480,8 @@ class MandelbrotView(ChartViewBase):
             self._values = values.reshape(int(result["rows"]), int(result["cols"]))
             self._values_view = make_viewport(result.get("centerX"), result.get("centerY"),
                                               result.get("span"))
+            self._preview_values = None
+            self._preview_values_view = None
         self._rendered_size = (int(result["cols"]), int(result["rows"]))
         self._redraw_payload(result)
 

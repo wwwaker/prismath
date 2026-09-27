@@ -28,6 +28,12 @@ stderr 里的 ``RuntimeWarning``（``-m`` 导入同名模块的提示）是解�
 
 金样本更新记录（每次刷新都要在这里写一句"为什么"）
 --------------------------------------------------
+* 2026-09-26 ``fourier_epicycles``：新增模型（傅里叶旋转矢量），首次生成金样本，固定住
+  内置心形频谱顺序、截断重建误差和旋转向量数量。
+* 2026-09-26 ``henon_map``：新增模型（亨农映射），首次生成金样本，固定住
+  一步递推、经典混沌吸引子范围与最大 Lyapunov 指数。
+* 2026-09-26 ``logistic_map``：新增模型（逻辑斯蒂映射），首次生成金样本，固定住
+  固定点、周期 2、混沌 Lyapunov 指数与小型分岔采样的确定性输出。
 * 2026-09-23 ``mandelbrot``：自检**新增两节**（第 3 节改成"解析判据的覆盖面"、新增第 7 节
   "自动迭代上限表"），所以整份金样本要刷新一次。第 3 节现在显式用
   ``skip_interior=False`` 跑一遍朴素迭代来当基准，于是它同时是"直接判内部"这条提速路径的
@@ -97,7 +103,8 @@ GOLDEN_DIR = pathlib.Path(__file__).resolve().parent / "golden"
 
 #: 参与金样本回归的模型（顺序 = 报告顺序；与 ``requirements.txt`` / README 的模型表一致）
 MODELS: Sequence[str] = ("life_game", "buffon_needle", "site_percolation", "percolation",
-                         "n_body", "mandelbrot")
+                         "n_body", "mandelbrot", "logistic_map", "henon_map",
+                         "fourier_epicycles")
 
 
 def normalize(text: str) -> str:

@@ -58,7 +58,7 @@ Mandelbrot 集核心模型
   画面不会干等它：视图先用上一帧**重采样出预览**（几十毫秒），清晰的那张在后台算完换上
   （见 :mod:`prismath.models.mandelbrot.views.tk`）。
 
-提速手段：两条**实测有效**的，一条**实测被否掉**的
+提速手段：三条**实测有效**的，一条**实测被否掉**的
 ---------------------------------------------------
 方向是"**少算**"而不是"把 numpy 写得更花"：纯 numpy 的逐像素向量化在重负载下相对纯 Python
 只有 3~6 倍（见 README 引用的对照基准），批次全量算 + 内存带宽就是天花板。于是：
@@ -84,19 +84,27 @@ Mandelbrot 集核心模型
    "集合内占比随上限不再变化"的那个值（实测数据见 ``tests/bench.py`` 的说明与下表）：
    海马谷 mag=9 时，上限 200 会把 **8%** 的像素误判成集合内（真值 0.03%），上限 1600 时
    只剩 0.04% —— 这就是"放大后形状发胖、一片暗"的量化原因。
-3. **导数判据（``|D| < eps`` 判内部）实测不用**：它是与周期无关的通用内部检测
+3. **实轴对称的半幅渲染**：当视窗中心恰在实轴（默认首屏与重置视图）时，
+   只迭代一半的行，再按共轭对称镜像恢复另一半。由于网格和迭代都是逐位对称的，
+   结果与完整计算逐像素相同，迭代量约减半；平移到非零虚部后自动退回完整计算。
+
+4. **导数判据（``|D| < eps`` 判内部）实测不用**：它是与周期无关的通用内部检测
    （文献里报过 20 倍级加速），但代价是每轮多一次复数递推（约 +50% 运算）。实测在三个
    视图上**全部更慢**（22→35 ms、50→74 ms、102→215 ms）：因为解析判据已经把 85~94% 的
    内部吃掉了，剩下那点内部省不回来这 50%。同样被否掉的还有"稀疏历史采样的周期检测"——
    它主要抓周期 1（也就是主心形，已经被解析判据覆盖）。**结论：先量再选，别照搬文献。**
 
-本模块只依赖标准库 + ``numpy``，不含任何绘图 / GUI 代码，可单独导入：
+默认路径只依赖标准库 + ``numpy``，不含任何绘图 / GUI 代码，可单独导入。
+可选 ``backend="numba"`` 按需加载同目录的 JIT 内核，支持多核与磁盘编译缓存；
+不启用 fastmath，复用相同的解析判据与色带。首次调用有导入 / 编译开销，
+所以默认仍为 ``numpy``；安装和性能对照见 README 的「Mandelbrot 可选 Numba 后端」。
 
     python -m prismath.models.mandelbrot.model      # 跑一段确定性自检
 """
 
 from __future__ import annotations
 
+import importlib.util
 import math
 import time
 from dataclasses import dataclass, field
@@ -123,6 +131,10 @@ __all__ = [
     "MIN_MAGNIFICATION",
     "MAX_MAGNIFICATION",
     "ESCAPE_RADIUS",
+    "BACKENDS",
+    "NUMBA_AUTO_MIN_POINTS",
+    "numba_available",
+    "resolve_backend",
     "LEVELS",
     "PALETTES",
     "AREA_REFERENCE",
@@ -178,6 +190,11 @@ MAX_SPAN: float = DEFAULT_SPAN * (2.0 ** MAX_MAGNIFICATION)
 #: 逃逸半径：``|z| > R`` 即判为发散（数学上 R = 2 就够）
 ESCAPE_RADIUS: float = 2.0
 
+# 计算后端。NumPy 是稳定的默认路径；Numba 只在显式选择，或 ``auto``
+# 实际计算点数较多时启用。阈值是保守策略；auto 首次启用仍有 JIT 开销。
+BACKENDS: Tuple[str, ...] = ("numpy", "numba", "auto")
+NUMBA_AUTO_MIN_POINTS: int = 100_000
+
 #: 色带档数：与 ``prismath.ui.tk.kit.chart.CMAPS`` 的 64 级色带一一对应
 LEVELS: int = 64
 
@@ -228,6 +245,47 @@ def _clamp_int(value: Any, low: int, high: int, fallback: int) -> int:
     except (TypeError, ValueError):
         return fallback
     return max(low, min(high, number))
+
+
+def numba_available() -> bool:
+    """Return whether the optional Numba package is discoverable.
+
+    ``find_spec`` deliberately avoids importing Numba during normal startup;
+    the import (and JIT compilation) happens only when the Numba backend is
+    actually selected.
+    """
+
+    try:
+        return importlib.util.find_spec("numba") is not None
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError):
+        return False
+
+
+def _validate_backend(backend: Any) -> str:
+    name = str(backend or "numpy").strip().lower()
+    if name not in BACKENDS:
+        choices = " / ".join(BACKENDS)
+        raise ValueError(f"未知的 Mandelbrot 计算后端：{backend!r}（可选：{choices}）")
+    return name
+
+
+def resolve_backend(backend: Any = "numpy", *, size: Optional[int] = None) -> str:
+    """Resolve a requested backend to ``"numpy"`` or ``"numba"``.
+
+    ``"auto"`` keeps the existing NumPy behavior for small jobs and when
+    Numba is not installed.  A caller that wants Numba deterministically can
+    pass ``"numba"`` and receives an actionable import error at render time
+    if the optional dependency is missing.
+    """
+
+    name = _validate_backend(backend)
+    if name != "auto":
+        return name
+    try:
+        points = max(0, int(size)) if size is not None else 0
+    except (TypeError, ValueError):
+        points = 0
+    return "numba" if points >= NUMBA_AUTO_MIN_POINTS and numba_available() else "numpy"
 
 
 # ----------------------------------------------------------------------
@@ -349,7 +407,8 @@ def complex_grid(viewport: Viewport, rows: int, cols: int) -> np.ndarray:
 def escape_counts(points: Union[np.ndarray, complex],
                   max_iter: int = DEFAULT_ITERATIONS,
                   bailout: float = ESCAPE_RADIUS,
-                  skip_interior: bool = True
+                  skip_interior: bool = True,
+                  backend: str = "numpy",
                   ) -> Tuple[np.ndarray, np.ndarray]:
     """对 ``points``（复数数组）做逃逸时间迭代，返回 ``(整数迭代数, 平滑迭代数)``。
 
@@ -357,6 +416,8 @@ def escape_counts(points: Union[np.ndarray, complex],
       一直有界的记 ``0``（即"属于 M"，上限是 ``max_iter``）；
     * 平滑迭代数 ``smooth``：逃逸点用 ``μ = n + 1 − log₂(ln|zₙ| / ln R)`` 抹平台阶值，
       未逃逸点固定为 ``max_iter``。
+    * ``backend`` 默认 ``numpy``；``numba`` 按需加载可选 JIT 内核，首次调用含编译
+      或磁盘缓存加载；``auto`` 在实际计算点数足够多且已安装 Numba 时选择它。
 
     实现要点（三条都是实测选出来的）：
 
@@ -375,17 +436,31 @@ def escape_counts(points: Union[np.ndarray, complex],
     c = np.asarray(points, dtype=np.complex128)
     shape = c.shape
     total = c.size
+    selected_backend = resolve_backend(backend, size=total)
     max_iter = max(1, int(max_iter))
     bailout = float(bailout) if float(bailout) > 1.0 else ESCAPE_RADIUS
     bailout2 = bailout * bailout
     log_bailout = math.log(bailout)
     inv_log2 = 1.0 / math.log(2.0)
 
+    if total == 0:
+        return np.zeros(shape, dtype=np.int32), np.full(shape, float(max_iter))
+
+    if selected_backend == "numba":
+        # Importing this module imports Numba and builds its JIT kernel, so it
+        # must stay behind the backend branch.  The analytic mask is still the
+        # same analytic predicates and constants used by the default implementation.
+        from .numba_backend import escape_counts_numba
+
+        interior = _numba_interior_mask(c) if skip_interior else np.zeros(shape, dtype=bool)
+        flat_counts, flat_smooth = escape_counts_numba(
+            c.real.reshape(-1), c.imag.reshape(-1), interior,
+            max_iter=max_iter, bailout=bailout,
+        )
+        return flat_counts.reshape(shape), flat_smooth.reshape(shape)
+
     counts = np.zeros(total, dtype=np.int32)
     smooth = np.full(total, float(max_iter), dtype=float)
-    if total == 0:
-        return counts.reshape(shape), smooth.reshape(shape)
-
     real_all = np.ascontiguousarray(c.real.reshape(-1))
     imag_all = np.ascontiguousarray(c.imag.reshape(-1))
     #: 解析判据先剔掉"不用算也知道在集合内"的点（默认取景能占内部像素的九成以上）
@@ -511,6 +586,14 @@ def interior_mask(points: Union[np.ndarray, complex], disks: bool = True) -> np.
     mask = mask | (((x - big_x) ** 2 + (y - big_y) ** 2 <= big_r * big_r)
                    & (x <= INTERIOR_BIG_DISK_MAX_X))
     return mask
+
+
+def _numba_interior_mask(points: np.ndarray) -> np.ndarray:
+    """只在 Numba 分支使用编译的同式判据；默认 NumPy 路径保持独立。"""
+    from .numba_backend import interior_mask_numba
+
+    return interior_mask_numba(points, INTERIOR_DISKS, INTERIOR_BIG_DISK,
+                               INTERIOR_BIG_DISK_MAX_X)
 
 
 def iterations_for(span: float) -> int:
@@ -657,11 +740,15 @@ class Mandelbrot:
         图像宽度（像素），高度 = ``round(pixels · aspect)``。
     aspect : float
         高 / 宽，默认 3:4。
+    backend : {"numpy", "numba", "auto"}
+        计算后端。默认 ``"numpy"`` 保持现有启动速度与依赖；``"numba"``
+        使用可选 JIT 内核，``"auto"`` 仅在较大图像且 Numba 已安装时启用。
     """
 
     def __init__(self, center_x: float = DEFAULT_CENTER_X, center_y: float = DEFAULT_CENTER_Y,
                  span: float = DEFAULT_SPAN, max_iter: int = DEFAULT_ITERATIONS,
-                 pixels: int = DEFAULT_PIXELS, aspect: float = DEFAULT_ASPECT) -> None:
+                 pixels: int = DEFAULT_PIXELS, aspect: float = DEFAULT_ASPECT,
+                 backend: str = "numpy") -> None:
         self.viewport = make_viewport(center_x, center_y, span)
         if int(max_iter) <= 0:                      # 0 = 自动：按放大倍率给
             max_iter = iterations_for(self.viewport.span)
@@ -672,6 +759,7 @@ class Mandelbrot:
         except (TypeError, ValueError):
             ratio = DEFAULT_ASPECT
         self.rows = _clamp_int(round(self.cols * ratio), 2, MAX_PIXELS, DEFAULT_ROWS)
+        self.backend = _validate_backend(backend)
 
     # ---------------- 便捷属性 ----------------
     @property
@@ -688,15 +776,36 @@ class Mandelbrot:
         return complex_grid(self.viewport, self.rows, self.cols)
 
     def render(self) -> MandelbrotField:
-        """算一次完整渲染（含逃逸时间迭代与统计）。"""
+        """算一次完整渲染（含逃逸时间迭代与统计）。
+
+        默认视窗的中心在实轴上，而 Mandelbrot 集关于实轴严格对称。此时只计算
+        上半部分，再镜像恢复下半部分，既保持逐像素结果一致，也把最昂贵的迭代量
+        近似减半。用户把视窗沿 y 轴移开后自动退回完整计算。
+        """
         started = time.perf_counter()
         points = self.points()
-        counts, smooth = escape_counts(points, self.max_iter)
+        symmetric = self.viewport.center_y == 0.0 and self.rows >= 2
+        compute_size = ((self.rows + 1) // 2) * self.cols if symmetric else points.size
+        backend = resolve_backend(self.backend, size=compute_size)
+        if symmetric:
+            midpoint = self.rows // 2
+            upper = points[midpoint:]
+            half_counts, half_smooth = escape_counts(upper, self.max_iter, backend=backend)
+            if self.rows % 2:
+                # 奇数行包含一条实轴上的中心行，不能重复拼接。
+                counts = np.concatenate((half_counts[:0:-1], half_counts), axis=0)
+                smooth = np.concatenate((half_smooth[:0:-1], half_smooth), axis=0)
+            else:
+                counts = np.concatenate((half_counts[::-1], half_counts), axis=0)
+                smooth = np.concatenate((half_smooth[::-1], half_smooth), axis=0)
+        else:
+            counts, smooth = escape_counts(points, self.max_iter, backend=backend)
+        analytic = _numba_interior_mask(points) if backend == "numba" else interior_mask(points)
         return MandelbrotField(
             viewport=self.viewport, rows=self.rows, cols=self.cols, max_iter=self.max_iter,
             counts=counts, smooth=smooth,
             # 顺手数一下有多少像素是解析判据直接判的（界面与文档里的"省了多少"）
-            analytic_inside=int(np.count_nonzero(interior_mask(points))),
+            analytic_inside=int(np.count_nonzero(analytic)),
             elapsed=time.perf_counter() - started,
         )
 
@@ -709,7 +818,7 @@ class Mandelbrot:
         """换一个取景框（其余参数不变）。"""
         return Mandelbrot(center_x=viewport.center_x, center_y=viewport.center_y,
                           span=viewport.span, max_iter=self.max_iter, pixels=self.cols,
-                          aspect=self.rows / self.cols)
+                          aspect=self.rows / self.cols, backend=self.backend)
 
 
 # ----------------------------------------------------------------------
@@ -718,7 +827,8 @@ class Mandelbrot:
 def scan_iterations(iterations: List[int], center_x: float = DEFAULT_CENTER_X,
                     center_y: float = DEFAULT_CENTER_Y, span: float = DEFAULT_SPAN,
                     pixels: int = 240,
-                    aspect: float = DEFAULT_ASPECT) -> List[Tuple[int, MandelbrotField]]:
+                    aspect: float = DEFAULT_ASPECT,
+                    backend: str = "numpy") -> List[Tuple[int, MandelbrotField]]:
     """对每个迭代上限各渲染一次（同一取景框、同一分辨率），返回 ``[(上限, 结果)]``。
 
     同一台机器上每次渲染只差一个"迭代上限"，所以这张表干净地回答一个问题：
@@ -726,7 +836,7 @@ def scan_iterations(iterations: List[int], center_x: float = DEFAULT_CENTER_X,
     """
     model = Mandelbrot(center_x=center_x, center_y=center_y, span=span,
                        max_iter=max(iterations) if iterations else DEFAULT_ITERATIONS,
-                       pixels=pixels, aspect=aspect)
+                       pixels=pixels, aspect=aspect, backend=backend)
     out: List[Tuple[int, MandelbrotField]] = []
     for value in iterations:
         model.max_iter = _clamp_int(value, MIN_ITERATIONS, MAX_ITERATIONS, DEFAULT_ITERATIONS)

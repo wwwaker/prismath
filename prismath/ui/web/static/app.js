@@ -365,6 +365,14 @@ function paramHTML(p) {
       ${p.hint ? `<div class="hint">${p.hint}</div>` : ''}
     </div>`;
   }
+  if (['str', 'path', 'text'].includes(p.kind)) {
+    return `
+    <div class="field">
+      <div class="field-label"><span>${p.label}</span></div>
+      <input type="text" data-key="${p.key}" value="${p.default || ''}" placeholder="输入图片路径…">
+      ${p.hint ? `<div class="hint">${p.hint}</div>` : ''}
+    </div>`;
+  }
   const isFloat = p.kind === 'float';
   const step = p.step ?? (isFloat ? 0.01 : 1);
   const spread = toNum(p.max ?? 1) - toNum(p.min ?? 0);
@@ -394,6 +402,7 @@ function paramHTML(p) {
 function bindParam(p) {
   const ranges = $$(`input[type="range"][data-key="${p.key}"]`, $('#paramBody'));
   const numbers = $$(`input[type="number"][data-key="${p.key}"]`, $('#paramBody'));
+  const texts = $$(`input[type="text"][data-key="${p.key}"]`, $('#paramBody'));
   const toggles = $$(`input[type="checkbox"][data-key="${p.key}"]`, $('#paramBody'));
   const segs = $$(`.seg[data-key="${p.key}"]`, $('#paramBody'));
   const labels = $$(`.val[data-for="${p.key}"]`, $('#paramBody'));
@@ -424,6 +433,9 @@ function bindParam(p) {
   numbers.forEach((n) => n.addEventListener('change', () => {
     const raw = parseInt(n.value, 10);
     commit(clamp(Number.isFinite(raw) ? raw : p.default, p.min ?? 0, p.max ?? 0), 'number');
+  }));
+  texts.forEach((input) => input.addEventListener('change', () => {
+    commit(input.value, 'text');
   }));
   toggles.forEach((t) => t.addEventListener('change', () => commit(t.checked, 'toggle')));
   segs.forEach((seg) => seg.addEventListener('click', (event) => {

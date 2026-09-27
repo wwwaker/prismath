@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import time
 import unittest
@@ -162,6 +163,15 @@ class SymmetryTest(unittest.TestCase):
         self.assertEqual(int(np.count_nonzero(counts != counts[::-1, :])), 0,
                          "共轭轨道的逃逸步数必须完全相同")
         self.assertTrue(np.array_equal(smooth, smooth[::-1, :]), "平滑值也应逐位镜像")
+
+    def test_render_symmetry_shortcut_preserves_full_field(self) -> None:
+        """中心在实轴时只算半幅也必须与完整迭代逐像素一致。"""
+        model = Mandelbrot(center_x=-0.6, center_y=0.0, span=3.2,
+                           max_iter=180, pixels=73, aspect=0.71)
+        field = model.render()
+        full_counts, full_smooth = escape_counts(model.points(), model.max_iter)
+        self.assertTrue(np.array_equal(field.counts, full_counts))
+        self.assertTrue(np.array_equal(field.smooth, full_smooth))
 
     def test_analytic_subset_never_escapes(self) -> None:
         """主心形 + 周期 2 圆盘整体在 M 里：解析判为内的点，逃逸判据不能说它跑了。"""
@@ -591,6 +601,10 @@ class ViewInteractionTest(unittest.TestCase):
         if self.shell is not None and self.shell.view is not None:
             self.shell.view.shutdown()
         self.root.destroy()
+        # 每条用例都创建独立 Tcl 解释器；主动在主线程清理控件引用与循环引用，
+        # 避免下一条用例的计算线程触发 GC，跨线程销毁上一条用例的 Tcl 对象。
+        self.view = self.shell = self.root = None
+        gc.collect()
 
     def _wait_sharp(self, timeout: float = 30.0) -> bool:
         """泵事件循环，直到后台算好的那张**清晰**图被采用（预览不算）。"""

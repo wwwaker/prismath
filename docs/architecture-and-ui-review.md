@@ -279,7 +279,7 @@ prismath/models/<模型包>/
 | 可视化范式覆盖 | 🟡 基本够用 | 栅格 / 热力图已由层 1 的 `kind="grid"` 覆盖（离散态 + 连续场两条渲染路径，后者由 `mandelbrot` 落地验证）；仍缺**图 / 网络**类（见 §8.1） |
 | 界面后端数量 | 🟡 受限 | 实际可用只有 tk；cli 为统计模式；web 已弃用 |
 | 依赖策略 | ✅ 清晰 | `numpy` 必需（全部数值内核向量化）；`matplotlib` / `pywebview` 可选、缺失即提示；依赖一律声明在 `requirements.txt`（见 §2.4） |
-| 测试 | ✅ 成熟 | `tests/`：**六个模型**自检输出的金样本逐字比对 + **187 条测试**（教材结论精确相等 / 统计量固定种子 + 容差 / 渗流的等价性护栏 / **视图无头冒烟**）+ `tests/bench.py` 微基准；全量约 60 s（`python -m unittest discover -s tests -t .`；视图那几条要真开窗口，机器忙时会明显更久）。计数随 Step 2 / Step 6 之后的补测增长：Step 6 当时是 88 条 / 31.7 s，其后又补了视图冒烟与 `n_body` / `mandelbrot` 那两批（见 §6.2 / §6.3） |
+| 测试 | ✅ 成熟 | `tests/`：**九个模型**自检输出的金样本逐字比对 + **235 条测试**（教材结论精确相等 / 统计量固定种子 + 容差 / 渗流的等价性护栏 / **视图无头冒烟**）+ `tests/bench.py` 微基准；全量约 50 s（`python -m unittest discover -s tests -t .`；视图那几条要真开窗口，机器忙时会明显更久）。新增 Logistic Map 后补上固定点、周期 2、Lyapunov 指数和分岔采样护栏；新增 Hénon Map 后补上二维递推、吸引子有界性、最大 Lyapunov 指数、发散保护、CLI 默认值隔离与真实首屏/恢复交互护栏；新增 Fourier Epicycles 后补上轮廓采样、DFT 主频、截断重建误差和严格 JSON payload 护栏。 |
 
 ---
 
