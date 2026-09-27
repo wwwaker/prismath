@@ -37,3 +37,7 @@ desktop.ini
 *.log
 output/
 exports/
+
+# ===== 本地设计与问题记录 =====
+# 详细设计文档保留在本地，但不纳入项目 Git 仓库
+docs/
